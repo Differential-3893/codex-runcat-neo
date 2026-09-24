@@ -1,0 +1,29 @@
+{
+  "title": "Codex",
+  "symbol": "camera.aperture",
+  "metrics": [
+    {
+      "title": "Plan",
+      "formattedValue": "Pro"
+    },
+    {
+      "title": "Weekly Remaining",
+      "formattedValue": "39%",
+      "normalizedValue": 0.39
+    },
+    {
+      "title": "Reset",
+      "formattedValue": "9/26 11:50"
+    },
+    {
+      "title": "Reset Coupons",
+      "formattedValue": "2"
+    },
+    {
+      "title": "Next Expiry",
+      "formattedValue": "10/5 13:19"
+    }
+  ],
+  "lastUpdatedDate": "2026-09-24T15:07:15Z",
+  "metricsBarValue": "39%"
+}
