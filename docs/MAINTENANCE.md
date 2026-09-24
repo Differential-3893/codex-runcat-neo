@@ -5,6 +5,8 @@ This file is intentionally written as an AI/human handoff.
 ## Current architecture
 
 ```text
+A. Immediate path
+
 Codex turn completes
         |
         v
@@ -21,15 +23,44 @@ user-level Stop hook
         +--> local `codex app-server --listen stdio://`
                |
                +--> account/rateLimits/read
-                      |
-                      +--> planType
-                      +--> rateLimitResetCredits
+
+B. Idle/background path
+
+launchd every 300 s
+        |
+        v
+~/.codex/runcat-neo-hook.py --refresh
+        |
+        v
+local `codex app-server --listen stdio://`
+        |
+        +--> account/rateLimits/read
+
+Both paths
         |
         v
 ~/.codex/runcat-usage.json
         |
         v
 RunCat Neo Custom Metrics
+```
+
+The Stop hook prefers transcript quota windows for immediate post-turn freshness.
+The background path has no transcript and uses account-level quota windows.
+
+## Refresh invariant
+
+The integration must remain useful even when Codex is not currently being used.
+
+- Stop hook: immediate update after a turn.
+- LaunchAgent: account refresh every five minutes.
+- Background refresh must not require a transcript.
+- A failed account refresh must not destroy a valid existing snapshot.
+
+The LaunchAgent label is:
+
+```text
+dev.runcat.codex-usage
 ```
 
 ## User-facing semantics
@@ -48,6 +79,14 @@ It intentionally does not show:
 - per-session context-window usage,
 - email/account identity.
 
+The card symbol is currently:
+
+```text
+apple.terminal
+```
+
+This is a generic SF Symbol, not an official Codex logo.
+
 ## Current plan mapping
 
 ```text
@@ -63,8 +102,8 @@ Unknown future backend values should be preserved rather than guessed.
 
 ## Verified protocol fields
 
-The integration currently understands token-count transcript fields in the
-historical snake_case shape:
+The integration understands token-count transcript fields in the historical
+snake_case shape:
 
 ```json
 {
@@ -116,45 +155,39 @@ Do not start by rewriting the integration from memory.
    python3 scripts/diagnose.py
    ```
 
-2. Inspect the latest transcript separately if needed:
+2. Test account-only refresh independently:
 
    ```bash
-   transcript="$(
-     find ~/.codex/sessions -name '*.jsonl' -type f -print0 \
-     | xargs -0 stat -f '%m %N' \
-     | sort -nr \
-     | head -n 1 \
-     | cut -d ' ' -f 2-
-   )"
-   echo "$transcript"
+   python3 ~/.codex/runcat-neo-hook.py --refresh
+   python3 -m json.tool ~/.codex/runcat-usage.json
    ```
 
-3. Determine:
+3. Inspect the latest transcript separately if needed.
+
+4. Determine:
    - whether the main quota is still in `primary`/`secondary`,
    - whether the duration changed,
    - whether `usedPercent` is still “used” rather than “remaining”,
    - whether reset-credit fields changed,
    - whether plan values changed.
 
-4. Make the smallest schema-specific change.
+5. Make the smallest schema-specific change.
 
-5. Preserve `~/.codex/runcat-usage.json` unless there is a strong reason not to.
+6. Preserve `~/.codex/runcat-usage.json` unless there is a strong reason not to.
 
-6. Run:
+7. Run the unit tests and shell syntax checks.
 
-   ```bash
-   ./scripts/test-latest.sh
-   ```
-
-7. Verify the RunCat card visually.
+8. Verify both paths:
+   - `--refresh` with no transcript,
+   - a real Stop-hook run after a Codex turn.
 
 ## Account switching invariant
 
 Never allow stale reset-credit metadata from account A to be displayed as if it
 belongs to account B.
 
-The current implementation therefore reads account metadata on each Stop hook
-run and does not fall back to cached account/coupon data.
+The implementation therefore reads account metadata on every Stop-hook and every
+background run and does not fall back to cached account/coupon data.
 
 If caching is introduced later, it must be keyed by a reliably detected account
 identity and must not persist raw email/access-token data.

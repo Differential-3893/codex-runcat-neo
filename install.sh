@@ -6,9 +6,23 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 HOOK_SRC="$SCRIPT_DIR/runcat-neo-hook.py"
 HOOK_DST="$CODEX_HOME/runcat-neo-hook.py"
 HOOKS_JSON="$CODEX_HOME/hooks.json"
+LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+REFRESH_LABEL="dev.runcat.codex-usage"
+REFRESH_PLIST="$LAUNCH_AGENTS/$REFRESH_LABEL.plist"
 STAMP=$(date +%Y%m%d-%H%M%S)
+PYTHON_BIN=$(command -v python3 || true)
 
-mkdir -p "$CODEX_HOME"
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "This integration requires macOS." >&2
+  exit 1
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+  echo "python3 was not found on PATH." >&2
+  exit 1
+fi
+
+mkdir -p "$CODEX_HOME" "$LAUNCH_AGENTS"
 
 if [ -f "$HOOK_DST" ]; then
   cp -p "$HOOK_DST" "$HOOK_DST.backup-$STAMP"
@@ -25,7 +39,7 @@ fi
 cp "$HOOK_SRC" "$HOOK_DST"
 chmod 755 "$HOOK_DST"
 
-HOOK_DST="$HOOK_DST" HOOKS_JSON="$HOOKS_JSON" python3 - <<'PY'
+HOOK_DST="$HOOK_DST" HOOKS_JSON="$HOOKS_JSON" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -53,7 +67,6 @@ if not isinstance(stop, list):
     raise SystemExit(f"{hooks_path}: hooks.Stop must be an array")
 
 already_present = False
-
 for group in stop:
     if not isinstance(group, dict):
         continue
@@ -86,17 +99,42 @@ hooks_path.write_text(
 )
 PY
 
+"$PYTHON_BIN" - "$REFRESH_PLIST" "$PYTHON_BIN" "$HOOK_DST" "$CODEX_HOME/runcat-refresh.stdout.log" "$CODEX_HOME/runcat-refresh.stderr.log" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+plist_path, python_bin, hook_path, stdout_path, stderr_path = sys.argv[1:]
+
+payload = {
+    "Label": "dev.runcat.codex-usage",
+    "ProgramArguments": [python_bin, hook_path, "--refresh"],
+    "StartInterval": 300,
+    "RunAtLoad": True,
+    "StandardOutPath": stdout_path,
+    "StandardErrorPath": stderr_path,
+}
+
+with Path(plist_path).open("wb") as f:
+    plistlib.dump(payload, f)
+PY
+
+# Refresh once now, then register the five-minute background job.
+"$PYTHON_BIN" "$HOOK_DST" --refresh || true
+launchctl bootout "gui/$(id -u)/$REFRESH_LABEL" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$REFRESH_PLIST"
+
 echo
-echo "Installed Codex → RunCat Neo hook:"
+echo "Installed Codex -> RunCat Neo integration:"
+echo "  Stop hook: immediate refresh after Codex turns"
+echo "  Background: refresh every 5 minutes"
+echo
+echo "Hook:"
 echo "  $HOOK_DST"
+echo "LaunchAgent:"
+echo "  $REFRESH_PLIST"
 echo
-echo "Registered Stop hook in:"
-echo "  $HOOKS_JSON"
+echo "If RunCat Neo already watches ~/.codex/runcat-usage.json, no re-adding is needed."
 echo
-echo "Next:"
-echo "  1. Launch Codex CLI and review/trust the hook if prompted."
-echo "  2. Complete one Codex turn."
-echo "  3. Add ~/.codex/runcat-usage.json to RunCat Neo Custom Metrics."
-echo
-echo "Optional manual test:"
-echo "  ./scripts/test-latest.sh"
+echo "Optional manual refresh:"
+echo "  python3 $HOOK_DST --refresh"

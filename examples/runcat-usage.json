@@ -1,6 +1,7 @@
 {
   "title": "Codex",
-  "symbol": "camera.aperture",
+  "symbol": "apple.terminal",
+  "metricsBarValue": "39%",
   "metrics": [
     {
       "title": "Plan",
@@ -24,6 +25,5 @@
       "formattedValue": "10/5 13:19"
     }
   ],
-  "lastUpdatedDate": "2026-09-24T15:07:15Z",
-  "metricsBarValue": "39%"
+  "lastUpdatedDate": "2026-09-24T15:00:00Z"
 }

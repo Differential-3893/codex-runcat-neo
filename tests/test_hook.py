@@ -38,7 +38,7 @@ class HookTests(unittest.TestCase):
         self.assertEqual(hook.quota_title(300), "5h Remaining")
         self.assertEqual(hook.quota_title(None), "Quota Remaining")
 
-    def test_snapshot_uses_remaining_percentage(self):
+    def test_stop_hook_snapshot_uses_remaining_percentage(self):
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "session.jsonl"
             out = Path(tmp) / "runcat.json"
@@ -61,31 +61,61 @@ class HookTests(unittest.TestCase):
 
             account = {
                 "planType": "pro",
+                "resetCoupons": {"availableCount": 2, "credits": []},
+            }
+
+            with mock.patch.object(hook, "OUT", out), mock.patch.object(
+                hook, "account_data", return_value=account
+            ):
+                wrote = hook.write_snapshot({"transcript_path": str(transcript)})
+
+            self.assertTrue(wrote)
+            data = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(data["metricsBarValue"], "39%")
+            self.assertEqual(data["symbol"], "line.3.crossed.swirl.circle")
+
+            metrics = {item["title"]: item for item in data["metrics"]}
+            self.assertEqual(metrics["Plan"]["formattedValue"], "Pro")
+            self.assertEqual(metrics["Weekly Remaining"]["formattedValue"], "39%")
+            self.assertEqual(metrics["Weekly Remaining"]["normalizedValue"], 0.39)
+            self.assertEqual(metrics["Reset Coupons"]["formattedValue"], "2")
+
+    def test_background_refresh_needs_no_transcript(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "runcat.json"
+            account = {
+                "planType": "pro",
+                "primary": {
+                    "usedPercent": 61.0,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1790391033,
+                },
+                "secondary": None,
                 "resetCoupons": {
                     "availableCount": 2,
-                    "credits": [],
+                    "credits": [
+                        {
+                            "status": "available",
+                            "expiresAt": 1791173986,
+                            "title": "Full reset",
+                        }
+                    ],
                 },
             }
 
             with mock.patch.object(hook, "OUT", out), mock.patch.object(
                 hook, "account_data", return_value=account
             ):
-                hook.write_snapshot({"transcript_path": str(transcript)})
+                wrote = hook.refresh_from_account()
 
+            self.assertTrue(wrote)
             data = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(data["metricsBarValue"], "39%")
-
             metrics = {item["title"]: item for item in data["metrics"]}
             self.assertEqual(metrics["Plan"]["formattedValue"], "Pro")
-            self.assertEqual(
-                metrics["Weekly Remaining"]["formattedValue"],
-                "39%",
-            )
-            self.assertEqual(
-                metrics["Weekly Remaining"]["normalizedValue"],
-                0.39,
-            )
+            self.assertEqual(metrics["Weekly Remaining"]["formattedValue"], "39%")
             self.assertEqual(metrics["Reset Coupons"]["formattedValue"], "2")
+            self.assertIn("Next Expiry", metrics)
 
 
 if __name__ == "__main__":

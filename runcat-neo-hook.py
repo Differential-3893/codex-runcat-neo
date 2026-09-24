@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """RunCat Neo Custom Metrics producer for OpenAI Codex.
 
-Reads the latest Codex token_count event from the session transcript supplied by
-the Codex Stop hook, reads account-level plan/reset-credit metadata from the
-local Codex app-server, and writes ~/.codex/runcat-usage.json.
+Two refresh paths share the same producer:
+- Codex Stop hook: refreshes immediately after a Codex turn and may use the
+  turn transcript for the freshest quota snapshot.
+- ``--refresh``: refreshes from the currently active Codex account without a
+  transcript, intended for a lightweight launchd job every few minutes.
 
 No access token, email address, account id, or transcript content is written to
 the RunCat metrics file.
@@ -11,6 +13,7 @@ the RunCat metrics file.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import select
@@ -105,12 +108,7 @@ def transcript_plan_type(token_count: dict[str, Any] | None) -> str | None:
 
 
 def select_main_quota_window(windows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Select the longest finite account quota window.
-
-    This intentionally prefers a weekly/monthly-style allowance over a shorter
-    burst window if both are present. If duration metadata is absent, preserve
-    backend order by taking the first available window.
-    """
+    """Select the longest finite account quota window."""
 
     if not windows:
         return None
@@ -212,7 +210,7 @@ def fetch_account_data() -> dict[str, Any]:
                     "clientInfo": {
                         "name": "runcat-neo",
                         "title": "RunCat Neo",
-                        "version": "1.0",
+                        "version": "1.1",
                     },
                     "capabilities": {
                         "experimentalApi": True,
@@ -279,12 +277,7 @@ def fetch_account_data() -> dict[str, Any]:
 
 
 def account_data() -> dict[str, Any] | None:
-    """Read the currently active Codex account every run.
-
-    Deliberately avoids stale cross-account cache fallback: after an account
-    switch, old coupon metadata must not be presented as belonging to the new
-    account.
-    """
+    """Read the currently active Codex account every run."""
 
     try:
         return fetch_account_data()
@@ -338,7 +331,6 @@ def plan_name(raw: Any) -> str | None:
     if value in names:
         return names[value]
 
-    # Preserve unknown/future backend plan names rather than guessing a tier.
     return raw.strip().replace("_", " ").title()
 
 
@@ -402,21 +394,26 @@ def percentage_text(value: float) -> str:
     return f"{value:.1f}".rstrip("0").rstrip(".") + "%"
 
 
-def write_snapshot(hook_input: dict[str, Any]) -> None:
+def write_snapshot(hook_input: dict[str, Any] | None = None) -> bool:
+    """Write a snapshot and return True when quota data was available."""
+
+    hook_input = hook_input if isinstance(hook_input, dict) else {}
     token_count = latest_token_count(hook_input.get("transcript_path"))
     account = account_data()
 
+    # A Stop hook gets the turn-local transcript first for immediate freshness.
+    # Background refreshes have no transcript and therefore use account data.
     windows = transcript_windows(token_count)
     if not windows:
         windows = account_windows(account)
 
     window = select_main_quota_window(windows)
     if window is None:
-        return
+        return False
 
     used = window.get("usedPercent")
     if not isinstance(used, (int, float)):
-        return
+        return False
 
     remaining = max(0.0, min(100.0, 100.0 - float(used)))
     formatted_remaining = percentage_text(remaining)
@@ -459,16 +456,34 @@ def write_snapshot(hook_input: dict[str, Any]) -> None:
 
     snapshot = {
         "title": "Codex",
-        "symbol": "camera.aperture",
+        "symbol": "apple.terminal",
         "metrics": metrics,
         "lastUpdatedDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "metricsBarValue": formatted_remaining,
     }
 
     atomic_write_json(OUT, snapshot)
+    return True
+
+
+def refresh_from_account() -> bool:
+    """Background refresh path used by launchd; no transcript is required."""
+
+    return write_snapshot({})
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--refresh", action="store_true")
+    args, _unknown = parser.parse_known_args()
+
+    if args.refresh:
+        try:
+            refresh_from_account()
+        except Exception as error:
+            print(f"RunCat Codex refresh: {error}", file=sys.stderr)
+        return
+
     try:
         hook_input = json.load(sys.stdin)
         if not isinstance(hook_input, dict):

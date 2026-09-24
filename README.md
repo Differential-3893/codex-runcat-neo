@@ -2,7 +2,21 @@
 
 Unofficial OpenAI Codex usage metrics for [RunCat Neo](https://github.com/runcat-dev/RunCatNeo) on macOS.
 
-It installs a user-level Codex `Stop` hook that writes a RunCat Neo Custom Metrics JSON file after each Codex turn.
+The integration uses two refresh paths:
+
+```text
+Codex turn completes -> Stop hook -> immediate refresh
+                         +
+launchd every 5 min  -> account refresh
+                         |
+                         v
+              ~/.codex/runcat-usage.json
+                         |
+                         v
+                   RunCat Neo
+```
+
+This means the card stays useful even when Codex is not currently being used, while a completed Codex turn can still update it immediately.
 
 Example card:
 
@@ -26,7 +40,7 @@ This project is not affiliated with or endorsed by OpenAI or RunCat.
 - **Remaining quota** — the main account quota shown as *remaining*, not used.
 - **Reset** — the backend-provided reset time in your Mac's local timezone.
 - **Reset Coupons** — the number of currently available Codex usage-limit reset credits.
-- **Next Expiry** — the earliest expiry among the available reset credits for which the backend returned details.
+- **Next Expiry** — the earliest expiry among available reset credits for which the backend returned details.
 
 Known plan display mappings:
 
@@ -40,6 +54,27 @@ Known plan display mappings:
 
 Unknown/future values are displayed without guessing a different commercial tier.
 
+## Refresh behavior
+
+The integration deliberately combines event-driven and scheduled refreshes.
+
+- **After a Codex turn:** the user-level `Stop` hook refreshes the snapshot immediately. The turn transcript is preferred for the quota window because it is the freshest turn-local observation.
+- **While Codex is idle:** a macOS LaunchAgent runs `runcat-neo-hook.py --refresh` every **5 minutes**. This queries the currently active Codex account directly through the local Codex app-server, so no transcript or active Codex session is required.
+
+Five minutes is intentionally a background cadence, not a real-time sampling rate. Quota reset/coupon/account metadata changes slowly, while immediate post-usage changes are already covered by the Stop hook.
+
+If a background query temporarily fails, the existing RunCat JSON snapshot is left intact rather than being replaced with guessed or stale cross-account metadata.
+
+## Symbol
+
+The card uses the SF Symbol:
+
+```text
+apple.terminal
+```
+
+It is an abstract crossed-swirl glyph that fits Codex better than the previous `camera.aperture` symbol while remaining a generic system symbol rather than pretending to be the official Codex logo.
+
 ## Requirements
 
 - macOS
@@ -50,21 +85,21 @@ Unknown/future values are displayed without guessing a different commercial tier
   - `codex` on `PATH`
 - RunCat Neo
 
-The quota percentage itself is read from the Codex session transcript. Plan and reset-credit metadata are read through the local Codex app-server using the active Codex login.
+Account-level quota, plan, reset time, and reset-credit metadata are read through the local Codex app-server using the active Codex login. The Stop hook can additionally use the current session transcript for the freshest quota observation immediately after a turn.
 
 ## Install
 
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/codex-runcat-neo.git
+git clone https://github.com/Differential-3893/codex-runcat-neo.git
 cd codex-runcat-neo
 ```
 
 Then run:
 
 ```bash
-./install.sh
+sh install.sh
 ```
 
 The installer:
@@ -72,13 +107,16 @@ The installer:
 1. installs `runcat-neo-hook.py` at `~/.codex/runcat-neo-hook.py`,
 2. backs up an existing hook script and `~/.codex/hooks.json`,
 3. merges a `Stop` command hook into the existing `hooks.json` without overwriting unrelated hooks,
-4. preserves the output path `~/.codex/runcat-usage.json`.
+4. installs `~/Library/LaunchAgents/dev.runcat.codex-usage.plist`,
+5. performs one immediate account refresh,
+6. schedules account refreshes every five minutes,
+7. preserves the output path `~/.codex/runcat-usage.json`.
 
 On the next Codex CLI launch, review/trust the hook if Codex asks you to do so.
 
 ## Add the metric to RunCat Neo
 
-After completing one Codex turn, the hook should create:
+The integration writes:
 
 ```text
 ~/.codex/runcat-usage.json
@@ -86,14 +124,23 @@ After completing one Codex turn, the hook should create:
 
 Add that file as a **Custom Metrics** source in RunCat Neo.
 
-You do not need to re-add it after future hook updates as long as the output path stays the same.
+You do not need to re-add it after future updates as long as the output path stays the same.
 
-## Manual test
+## Manual account refresh
+
+This works without completing a Codex turn:
+
+```bash
+python3 ~/.codex/runcat-neo-hook.py --refresh
+python3 -m json.tool ~/.codex/runcat-usage.json
+```
+
+## Manual Stop-hook test
 
 After installation and after at least one Codex session exists:
 
 ```bash
-./scripts/test-latest.sh
+sh scripts/test-latest.sh
 ```
 
 A standalone line containing:
@@ -103,8 +150,6 @@ A standalone line containing:
 ```
 
 is normal. It is the hook response returned to Codex.
-
-The command then prints the generated RunCat JSON.
 
 ## Safe diagnostic
 
@@ -118,13 +163,11 @@ This is useful after a Codex update if the backend schema or quota policy change
 
 ## Account switching
 
-The hook queries the currently active Codex account on every run for plan/reset-credit metadata.
+Both refresh paths query the currently active Codex account for account-level metadata.
 
-That is intentional: it avoids showing a previous account's reset coupons after switching accounts.
+That is intentional: it avoids showing a previous account's reset coupons after switching accounts. A background refresh will normally pick up a switched account within five minutes even if no Codex turn is completed; a completed turn updates it immediately.
 
-After switching Codex accounts, complete one turn on the new account. The next RunCat update should then reflect the new account.
-
-If the account-level query fails temporarily, the hook does **not** reuse old coupon metadata from a previous account. The quota percentage can still be produced from the current transcript when available.
+The integration does not use stale account/coupon cache fallback.
 
 ## Quota-window selection
 
@@ -140,40 +183,11 @@ Known labels:
 - other whole-hour windows → e.g. `5h Remaining`
 - unknown duration → `Quota Remaining`
 
-This is deliberately small and mechanical rather than trying to predict future Codex policy.
+This is deliberately mechanical rather than trying to predict future Codex policy.
 
 ## Privacy
 
-The RunCat metrics file contains only display data such as:
-
-```json
-{
-  "title": "Codex",
-  "metrics": [
-    {
-      "title": "Plan",
-      "formattedValue": "Pro"
-    },
-    {
-      "title": "Weekly Remaining",
-      "formattedValue": "39%",
-      "normalizedValue": 0.39
-    },
-    {
-      "title": "Reset",
-      "formattedValue": "9/26 11:50"
-    },
-    {
-      "title": "Reset Coupons",
-      "formattedValue": "2"
-    },
-    {
-      "title": "Next Expiry",
-      "formattedValue": "10/5 13:19"
-    }
-  ]
-}
-```
+The RunCat metrics file contains only display data such as plan, remaining quota, reset times, and reset-credit count/expiry.
 
 It does **not** write:
 
@@ -186,13 +200,21 @@ It does **not** write:
 
 Do not commit files from `~/.codex/` to this repository.
 
+## Background job status
+
+```bash
+launchctl print gui/$(id -u)/dev.runcat.codex-usage
+```
+
+The LaunchAgent interval is 300 seconds.
+
 ## Uninstall
 
 ```bash
-./uninstall.sh
+sh uninstall.sh
 ```
 
-This removes the installed command hook and `~/.codex/runcat-neo-hook.py`.
+This removes the Stop-hook registration, background LaunchAgent, and installed hook script.
 
 It keeps `~/.codex/runcat-usage.json` so RunCat does not suddenly lose the source file. Delete that file manually if you want to remove the generated data too.
 

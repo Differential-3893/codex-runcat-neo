@@ -4,7 +4,12 @@ set -eu
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOOK_DST="$CODEX_HOME/runcat-neo-hook.py"
 HOOKS_JSON="$CODEX_HOME/hooks.json"
+REFRESH_LABEL="dev.runcat.codex-usage"
+REFRESH_PLIST="$HOME/Library/LaunchAgents/$REFRESH_LABEL.plist"
 STAMP=$(date +%Y%m%d-%H%M%S)
+
+launchctl bootout "gui/$(id -u)/$REFRESH_LABEL" >/dev/null 2>&1 || true
+rm -f "$REFRESH_PLIST"
 
 if [ -f "$HOOKS_JSON" ]; then
   cp -p "$HOOKS_JSON" "$HOOKS_JSON.backup-$STAMP"
@@ -66,7 +71,7 @@ fi
 
 rm -f "$HOOK_DST"
 
-echo "Removed Codex → RunCat Neo hook registration and script."
+echo "Removed Codex -> RunCat Neo Stop hook, background LaunchAgent, and script."
 echo
 echo "Generated data was kept:"
 echo "  $CODEX_HOME/runcat-usage.json"
