@@ -70,6 +70,7 @@ The integration currently prefers:
 - plan name,
 - remaining quota rather than used quota,
 - reset time,
+- current-account credit balance when available,
 - available reset-coupon count,
 - earliest available coupon expiry.
 
@@ -87,17 +88,31 @@ apple.terminal
 
 This is a generic SF Symbol, not an official Codex logo.
 
+## Credit balance
+
+Read `rateLimits.credits` from the same `account/rateLimits/read` response.
+Keep only `hasCredits`, `unlimited`, and `balance`; do not add another request.
+`Credits Remaining` displays a finite nonnegative numeric balance in credit
+units, rounding to whole credits using `Decimal` with `ROUND_HALF_UP`
+(for example, `1250.50` displays `1,251`). An explicit zero remains `0`.
+`unlimited: true` takes precedence and displays `Unlimited`. When `hasCredits`
+is true but the balance is unavailable or invalid, display `Available`.
+Otherwise omit the row; missing metadata must not be treated as zero.
+Never use transcript or cached credits as a fallback across accounts.
+
 ## Current plan mapping
 
 ```text
 free      -> Free
 plus      -> Plus
-prolite   -> Pro Lite
-pro       -> Pro
+prolite   -> Pro
+pro       -> Pro (More)
+promax    -> Pro (Max)
 business  -> Business
 ```
 
-Do not relabel `prolite`/`pro` as community nicknames such as “5x” or “20x”.
+These Pro labels follow [openai/codex commit b725da3](https://github.com/openai/codex/commit/b725da3b6d5237e8eb0cf8bb0bc47b8efa575fc2) (2026-09-25).
+Do not relabel `prolite`/`pro`/`promax` as community nicknames such as “5x” or “20x”.
 Unknown future backend values should be preserved rather than guessed.
 
 ## Verified protocol fields
@@ -125,6 +140,11 @@ The account app-server currently returns camelCase protocol fields such as:
 {
   "rateLimits": {
     "planType": "pro",
+    "credits": {
+      "hasCredits": true,
+      "unlimited": false,
+      "balance": "1250.50"
+    },
     "primary": {
       "usedPercent": 61,
       "windowDurationMins": 10080,
@@ -177,17 +197,24 @@ Do not start by rewriting the integration from memory.
 
 7. Run the unit tests and shell syntax checks.
 
+   ```bash
+   python3 -m unittest discover -s tests -v
+   sh -n install.sh
+   sh -n uninstall.sh
+   sh -n scripts/test-latest.sh
+   ```
+
 8. Verify both paths:
    - `--refresh` with no transcript,
    - a real Stop-hook run after a Codex turn.
 
 ## Account switching invariant
 
-Never allow stale reset-credit metadata from account A to be displayed as if it
+Never allow stale credit balances or reset-credit metadata from account A to be displayed as if it
 belongs to account B.
 
 The implementation therefore reads account metadata on every Stop-hook and every
-background run and does not fall back to cached account/coupon data.
+background run and does not fall back to cached account/credit/coupon data.
 
 If caching is introduced later, it must be keyed by a reliably detected account
 identity and must not persist raw email/access-token data.
@@ -212,6 +239,7 @@ OpenAI Codex:
 
 - `codex-rs/protocol/src/account.rs`
 - `codex-rs/app-server-protocol/src/protocol/v2/account.rs`
+- `codex-rs/tui/src/status/rate_limits.rs` (credits display semantics)
 - `codex-rs/backend-client/src/client/rate_limit_resets.rs`
 - `codex-rs/tui/src/chatwidget/reset_credits.rs`
 

@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -237,6 +238,13 @@ def fetch_account_data() -> dict[str, Any]:
         rate_limits = result.get("rateLimits")
         rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
 
+        credits = rate_limits.get("credits")
+        safe_credits = None
+        if isinstance(credits, dict):
+            safe_credits = {
+                key: credits.get(key) for key in ("hasCredits", "unlimited", "balance")
+            }
+
         reset_info = result.get("rateLimitResetCredits")
         safe_resets = None
 
@@ -262,6 +270,7 @@ def fetch_account_data() -> dict[str, Any]:
             "planType": rate_limits.get("planType"),
             "primary": rate_limits.get("primary"),
             "secondary": rate_limits.get("secondary"),
+            "credits": safe_credits,
             "resetCoupons": safe_resets,
         }
 
@@ -323,8 +332,9 @@ def plan_name(raw: Any) -> str | None:
     names = {
         "free": "Free",
         "plus": "Plus",
-        "prolite": "Pro Lite",
-        "pro": "Pro",
+        "prolite": "Pro",
+        "pro": "Pro (More)",
+        "promax": "Pro (Max)",
         "business": "Business",
     }
 
@@ -343,6 +353,34 @@ def local_time_text(timestamp: Any) -> str | None:
         return f"{dt.month}/{dt.day} {dt:%H:%M}"
     except (ValueError, OSError, OverflowError):
         return None
+
+
+def credit_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Display only current-account credits; missing balances are not zero."""
+
+    credits = account.get("credits") if isinstance(account, dict) else None
+    if not isinstance(credits, dict):
+        return []
+
+    value = None
+    if credits.get("unlimited") is True:
+        value = "Unlimited"
+    else:
+        raw_balance = credits.get("balance")
+        if isinstance(raw_balance, str):
+            try:
+                balance = Decimal(raw_balance.strip())
+                if balance.is_finite() and balance >= 0:
+                    rounded = balance.to_integral_value(rounding=ROUND_HALF_UP)
+                    value = format(int(rounded), ",")
+            except InvalidOperation:
+                pass
+        if value is None and credits.get("hasCredits") is True:
+            value = "Available"
+
+    if value is None:
+        return []
+    return [{"title": "Credits Remaining", "formattedValue": value}]
 
 
 def coupon_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -452,6 +490,7 @@ def write_snapshot(hook_input: dict[str, Any] | None = None) -> bool:
             }
         )
 
+    metrics.extend(credit_metrics(account))
     metrics.extend(coupon_metrics(account))
 
     snapshot = {

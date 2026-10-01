@@ -116,12 +116,18 @@ finally:
             pass
 
 limits = usage.get("rateLimits") or {}
+credits = limits.get("credits")
 reset_info = usage.get("rateLimitResetCredits")
 
 safe = {
     "planType": limits.get("planType"),
     "primary": limits.get("primary"),
     "secondary": limits.get("secondary"),
+    "credits": (
+        {key: credits.get(key) for key in ("hasCredits", "unlimited", "balance")}
+        if isinstance(credits, dict)
+        else None
+    ),
     "resetCoupons": None,
 }
 

@@ -5,7 +5,7 @@
   "metrics": [
     {
       "title": "Plan",
-      "formattedValue": "Pro"
+      "formattedValue": "Pro (More)"
     },
     {
       "title": "Weekly Remaining",
@@ -15,6 +15,10 @@
     {
       "title": "Reset",
       "formattedValue": "9/26 11:50"
+    },
+    {
+      "title": "Credits Remaining",
+      "formattedValue": "1,251"
     },
     {
       "title": "Reset Coupons",

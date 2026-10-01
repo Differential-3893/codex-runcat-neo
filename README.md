@@ -23,11 +23,12 @@ Example card:
 ```text
 Codex
 
-Plan: Pro
+Plan: Pro (More)
 Weekly Remaining: 39%
 [████████░░░░░░░░░░░░]
 
 Reset: 9/26 11:50
+Credits Remaining: 1,251
 Reset Coupons: 2
 Next Expiry: 10/5 13:19
 ```
@@ -39,8 +40,17 @@ This project is not affiliated with or endorsed by OpenAI or RunCat.
 - **Plan** — the current Codex account plan.
 - **Remaining quota** — the main account quota shown as *remaining*, not used.
 - **Reset** — the backend-provided reset time in your Mac's local timezone.
+- **Credits Remaining** — the current account's credit balance, when provided by Codex.
 - **Reset Coupons** — the number of currently available Codex usage-limit reset credits.
 - **Next Expiry** — the earliest expiry among available reset credits for which the backend returned details.
+
+Credit balances use Codex credit units, not dollars or quota percentages.
+Fractional balances are rounded to the nearest whole credit for display, with
+halves rounded up (for example, `1250.50` becomes `1,251`). An explicit zero is
+shown as `0`; unlimited credits show `Unlimited`. If Codex
+reports available credits without a usable balance, the row shows `Available`.
+Otherwise the row is omitted. Credit balances are read only from the current
+account, never from a previous transcript or cached account snapshot.
 
 Known plan display mappings:
 
@@ -48,8 +58,9 @@ Known plan display mappings:
 | --- | --- |
 | `free` | Free |
 | `plus` | Plus |
-| `prolite` | Pro Lite |
-| `pro` | Pro |
+| `prolite` | Pro |
+| `pro` | Pro (More) |
+| `promax` | Pro (Max) |
 | `business` | Business |
 
 Unknown/future values are displayed without guessing a different commercial tier.
@@ -73,7 +84,7 @@ The card uses the SF Symbol:
 apple.terminal
 ```
 
-It is an abstract crossed-swirl glyph that fits Codex better than the previous `camera.aperture` symbol while remaining a generic system symbol rather than pretending to be the official Codex logo.
+It is a terminal glyph from SF Symbols, not an official Codex logo.
 
 ## Requirements
 
@@ -167,7 +178,7 @@ Both refresh paths query the currently active Codex account for account-level me
 
 That is intentional: it avoids showing a previous account's reset coupons after switching accounts. A background refresh will normally pick up a switched account within five minutes even if no Codex turn is completed; a completed turn updates it immediately.
 
-The integration does not use stale account/coupon cache fallback.
+The integration does not use stale account/credit/coupon cache fallback.
 
 ## Quota-window selection
 
@@ -187,7 +198,7 @@ This is deliberately mechanical rather than trying to predict future Codex polic
 
 ## Privacy
 
-The RunCat metrics file contains only display data such as plan, remaining quota, reset times, and reset-credit count/expiry.
+The RunCat metrics file contains only display data such as plan, remaining quota, credit balance, reset times, and reset-credit count/expiry.
 
 It does **not** write:
 
@@ -236,6 +247,8 @@ The implementation follows public Codex protocol behavior, including:
 
 - account plan types:
   <https://github.com/openai/codex/blob/main/codex-rs/protocol/src/account.rs>
+- Pro plan display names (2026-09-25):
+  <https://github.com/openai/codex/commit/b725da3b6d5237e8eb0cf8bb0bc47b8efa575fc2>
 - account/rate-limit protocol types:
   <https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs>
 - account rate-limit/reset-credit backend reads:
