@@ -50,7 +50,8 @@ if args[0]=="bootstrap":
         self.env = {**os.environ,"HOME":str(self.home),"CODEX_HOME":str(self.codex_home),
                     "CODEX_BIN":self.codex,"PATH":str(self.bin)+os.pathsep+os.environ.get("PATH",os.defpath),
                     "TEST_STATE":str(self.root),"PYTHONDONTWRITEBYTECODE":"1"}
-        self.env.pop("RUNCAT_OUT_FILE",None)
+        for key in ("RUNCAT_OUT_FILE", "RUNCAT_PYTHON_BIN", "RUNCAT_RUNTIME_PATH"):
+            self.env.pop(key, None)
         self.plist = self.home/"Library/LaunchAgents/dev.runcat.codex-usage.plist"
         self.hooks = self.codex_home/"hooks.json"
         self.script = self.codex_home/"runcat-neo-hook.py"

@@ -12,6 +12,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from manage_install import wrapper_content
+
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = "dev.runcat.codex-usage"
 
@@ -32,7 +34,15 @@ def main() -> int:
     require(hashlib.sha256(script.read_bytes()).digest() == hashlib.sha256((ROOT / script.name).read_bytes()).digest(), "Installed producer does not match this package. Run install.sh first.")
     require(config.get("Label") == LABEL and config.get("StartInterval") == 300, "LaunchAgent cadence or label does not match.")
     environment = config.get("EnvironmentVariables", {})
+    require(isinstance(environment, dict), "LaunchAgent environment is invalid.")
     require(environment.get("CODEX_HOME") == str(home), "LaunchAgent CODEX_HOME is inconsistent.")
+    require(all(isinstance(environment.get(k), str) and environment[k] for k in
+                ("CODEX_HOME", "CODEX_BIN", "PATH", "RUNCAT_OUT_FILE")), "Saved runtime settings are incomplete.")
+    require(set(environment) == {"CODEX_HOME", "CODEX_BIN", "PATH", "RUNCAT_OUT_FILE"},
+            "Unexpected variables in the generated LaunchAgent environment.")
+    wrapper = home / "runcat-neo-hook.sh"
+    require(wrapper.read_bytes() == wrapper_content(args[0], script, environment),
+            "Stop hook runtime does not match the LaunchAgent; reinstall this package.")
     registered = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     require(registered.returncode == 0, "LaunchAgent is not registered in the current GUI session.")
     print("PASS: installed source matches; LaunchAgent is registered at 300 seconds.")

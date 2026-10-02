@@ -1,5 +1,8 @@
 # Stabilization — 2026-10-03
 
+Historical telemetry/installer patch notes. For the current consolidated delivery,
+see [release audit](RELEASE_AUDIT_20261003.md) and [runtime settings](RUNTIME_SETTINGS.md).
+
 Based on `66ccb6993c1fcb2866ddd31c3696f8bf6a7518e7`.
 
 The card, plan mapping, positive-credit half-up rounding, default output path,
@@ -77,3 +80,8 @@ must be performed on the installation machine using the supplied verifier.
 
 A new mandatory fix requires a reproducible failure and user impact, not a style
 preference or a new feature idea. This patch does not claim universal defect freedom.
+
+## Runtime-preservation follow-up
+
+See [reinstallation and runtime settings](RUNTIME_SETTINGS.md) for the subsequent
+entrypoint-level preservation correction and its supported-setting contract.

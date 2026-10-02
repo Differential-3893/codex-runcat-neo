@@ -1,24 +1,25 @@
 # codex-runcat-neo
 
 Unofficial OpenAI Codex usage metrics for [RunCat Neo](https://github.com/runcat-dev/RunCatNeo) on macOS.
-
-The integration uses two refresh paths:
+This project is not affiliated with or endorsed by OpenAI or RunCat.
 
 ```text
-Codex turn completes -> Stop hook -> immediate refresh
-                         +
-launchd every 5 min  -> account refresh
-                         |
-                         v
-              ~/.codex/runcat-usage.json
-                         |
-                         v
-                   RunCat Neo
+Codex turn completes -> Stop hook -> installed launcher -> refresh
+                                                        +
+launchd every 5 min  -> saved Python + producer -> account refresh
+                                                        |
+                                                        v
+                                    ~/.codex/runcat-usage.json (default)
+                                                        |
+                                                        v
+                                                    RunCat Neo
 ```
 
-This means the card stays useful even when Codex is not currently being used, while a completed Codex turn can still update it immediately.
+The Stop hook can use the completed turn's transcript for a recent quota
+observation. The five-minute account-only refresh needs no transcript and keeps
+working while Codex is idle. Neither path is a continuous real-time monitor.
 
-Example card:
+## What it shows
 
 ```text
 Codex
@@ -33,28 +34,21 @@ Reset Coupons: 2
 Next Expiry: 10/5 13:19
 ```
 
-This project is not affiliated with or endorsed by OpenAI or RunCat.
+This is an illustrative card, not live account data. It shows the account plan,
+remaining quota, the backend reset time in the Mac's local timezone, credit
+balance when supplied, and the available reset-coupon count/earliest expiry.
+`apple.terminal` is a generic SF Symbol, not an official Codex logo.
 
-## What it shows
+Credits are Codex credit units, not dollars or percentages. `unlimited: true`
+shows `Unlimited` even when `hasCredits` is false. Otherwise the row is omitted
+unless `hasCredits` is true. Finite positive balances are rounded half up to
+whole credits (`1250.50` becomes `1,251`; `0.001` becomes `0`). A hidden,
+invalid, zero or negative balance with `hasCredits: true` displays `Available`.
+Credits and coupons are read from the current account response, not recovered
+from transcript or cached account metadata.
 
-- **Plan** — the current Codex account plan.
-- **Remaining quota** — the main account quota shown as *remaining*, not used.
-- **Reset** — the backend-provided reset time in your Mac's local timezone.
-- **Credits Remaining** — the current account's credit balance, when provided by Codex.
-- **Reset Coupons** — the number of currently available Codex usage-limit reset credits.
-- **Next Expiry** — the earliest expiry among available reset credits for which the backend returned details.
-
-Credit balances use Codex credit units, not dollars or quota percentages.
-Unlimited credits show `Unlimited`, regardless of `hasCredits`. Otherwise the
-row is omitted unless `hasCredits` is true. Only finite positive balances are
-shown numerically, rounded to the nearest whole credit with halves rounded up
-(for example, `1250.50` becomes `1,251`, and `0.001` becomes `0`). When
-`hasCredits` is true but the balance is zero, negative, hidden, or invalid, the
-row shows `Available`. Credit balances are read only from the current account,
-never from a previous transcript or cached account snapshot.
-
-Known plan display mappings follow Codex `/status`
-(`SubscriptionDisplay::Status`), not `KnownPlan::display_name()` or analytics labels:
+The plan labels below retain the mapping checked against Codex
+`SubscriptionDisplay::Status` on 2026-10-02, rather than analytics labels:
 
 | Codex plan value | Display |
 | --- | --- |
@@ -73,210 +67,197 @@ Known plan display mappings follow Codex `/status`
 | `edu_plus` | Edu Plus |
 | `edu_pro` | Edu Pro |
 
-`hc` and `education` are aliases accepted by `PlanType::from_raw_value()`.
-Unknown/future values keep the existing fallback: trim whitespace, replace
-underscores with spaces, and title-case without guessing a different commercial tier.
-
-## Refresh behavior
-
-The integration deliberately combines event-driven and scheduled refreshes.
-
-- **After a Codex turn:** the user-level `Stop` hook refreshes the snapshot immediately. The turn transcript is preferred for the quota window because it is the freshest turn-local observation.
-- **While Codex is idle:** a macOS LaunchAgent runs `runcat-neo-hook.py --refresh` every **5 minutes**. This queries the currently active Codex account directly through the local Codex app-server, so no transcript or active Codex session is required.
-
-Five minutes is intentionally a background cadence, not a real-time sampling rate. Quota reset/coupon/account metadata changes slowly, while immediate post-usage changes are already covered by the Stop hook.
-
-If a background query temporarily fails, the existing RunCat JSON snapshot is left intact rather than being replaced with guessed or stale cross-account metadata.
-
-## Symbol
-
-The card uses the SF Symbol:
-
-```text
-apple.terminal
-```
-
-It is a terminal glyph from SF Symbols, not an official Codex logo.
+Unknown plan values are trimmed, underscores become spaces, and the result is
+title-cased without guessing a commercial tier. This is not a promise that
+future upstream policies or plan names will remain unchanged.
 
 ## Requirements
 
-- macOS
-- Python 3
-- Codex signed in with a ChatGPT account
-- Codex CLI available as either:
-  - `~/.local/bin/codex`, or
-  - `codex` on `PATH`
-- RunCat Neo
+- macOS and RunCat Neo with Custom Metrics support.
+- Python **3.9+** for this repository's installer, helpers and producer; no
+  third-party Python packages. Use a supported Python release for regular use.
+- A Codex CLI compatible with `codex app-server --listen stdio://`, signed in
+  with a ChatGPT account. On a fresh install, set `CODEX_BIN`, or have Codex at
+  `~/.local/bin/codex` or on `PATH`.
 
-Account-level quota, plan, reset time, and reset-credit metadata are read through the local Codex app-server using the active Codex login. The Stop hook can additionally use the current session transcript for the freshest quota observation immediately after a turn.
+The separate combined two-repository delivery helper requires Python 3.10+
+(the battery integration's minimum). Its bootstrap Python is not automatically
+selected as this integration's saved runtime Python.
 
-## Install
+## Install or update
 
-Clone the repository:
-
-```bash
+```sh
 git clone https://github.com/Differential-3893/codex-runcat-neo.git
 cd codex-runcat-neo
-```
-
-Then run:
-
-```bash
 sh install.sh
+python3 -B scripts/verify_local.py
 ```
 
-The installer:
+For an existing clone, update its source first without overwriting uncommitted
+work, then run the last two commands. No `sudo` is needed.
 
-1. installs `runcat-neo-hook.py` at `~/.codex/runcat-neo-hook.py`,
-2. backs up an existing hook script and `~/.codex/hooks.json`,
-3. merges a `Stop` command hook into the existing `hooks.json` without overwriting unrelated hooks,
-4. installs `~/Library/LaunchAgents/dev.runcat.codex-usage.plist`,
-5. performs one immediate account refresh,
-6. schedules account refreshes every five minutes,
-7. preserves the output path `~/.codex/runcat-usage.json`.
+The installer validates the saved configuration and executable paths before
+replacing files. It backs up its targets in a private `runcat-backup-*` directory
+under `CODEX_HOME`, installs `runcat-neo-hook.py` and the adjacent
+`runcat-neo-hook.sh` launcher, and merges exactly one owned Stop command into
+`hooks.json`. Unrelated hooks are preserved. It registers
+`~/Library/LaunchAgents/dev.runcat.codex-usage.plist` with a 300-second interval.
+`RunAtLoad` triggers the initial refresh; there is no redundant installer query.
 
-On the next Codex CLI launch, review/trust the hook if Codex asks you to do so.
+The launcher and LaunchAgent use the same saved Python, Codex executable,
+`CODEX_HOME`, output file and runtime `PATH`. Reopen Codex and approve the changed
+hook command if prompted. A successful install registration is distinct from a
+successful live account read: `scripts/verify_local.py` checks both refresh paths
+and prints `LOCAL CHECK PASSED` when its checks succeed. An offline account check
+may fail without undoing a successfully registered installation; the old metric
+snapshot is kept. The verifier does not observe a real Codex turn, a full timer
+cycle, or the RunCat user interface.
+
+On detected file/registration failure the installer restores previous target
+files and attempts to restore the previous job. Keep the printed backup if an
+operation or restoration fails; this is not crash/power-loss atomicity.
+
+## Reinstalling without losing custom settings
+
+Selection order is **explicit nonempty override → recorded installation value →
+fresh default**. Empty overrides are errors, not implicit resets. A different
+Python on today's shell `PATH` does not replace a saved runtime Python.
+
+A plain `sh install.sh` reuses the recorded `CODEX_HOME`, `RUNCAT_OUT_FILE`,
+`CODEX_BIN`, Python and runtime `PATH`. Use `RUNCAT_PYTHON_BIN` or
+`RUNCAT_RUNTIME_PATH` for deliberate runtime changes. A missing saved executable
+is reported instead of silently selecting a different one.
+
+```sh
+# Example only: select an existing interpreter explicitly.
+RUNCAT_PYTHON_BIN=/opt/homebrew/bin/python3.12 sh install.sh
+```
+
+Changing to a different `CODEX_HOME` while the old installation exists is refused;
+uninstall this integration first, then install into the new home. Changing an
+output path does not move/delete the old snapshot. See
+[the complete runtime-setting contract](docs/RUNTIME_SETTINGS.md) for all
+supported overrides and legacy migration limits. Arbitrary manual plist or
+wrapper edits are not a supported settings interface.
 
 ## Add the metric to RunCat Neo
 
-The integration writes:
+The default source is `~/.codex/runcat-usage.json`. Add it in RunCat Neo's Custom
+Metrics settings. With a custom output path, use the path printed by the installer.
+Do not re-add a source whose path has not changed.
 
-```text
-~/.codex/runcat-usage.json
+## Manual refresh, display and diagnosis
+
+Run these from this repository. They read the installed LaunchAgent, including a
+custom home/output path, and use its **saved Python and environment**:
+
+```sh
+python3 -B scripts/run_installed.py refresh
+python3 -B scripts/run_installed.py show
+python3 -B scripts/run_installed.py diagnose
 ```
 
-Add that file as a **Custom Metrics** source in RunCat Neo.
+`refresh` queries the current account and prints a newly written snapshot; it
+returns a nonzero status if it cannot verify a fresh result. `show` only prints
+the last saved snapshot, which may be stale; it makes no account request.
+`diagnose` prints only the installed producer's allowlisted account metadata and
+does not write a snapshot. Raw responses, token values and exception details are
+not printed on command failure. These helpers are one-shot commands, not new
+background jobs. Calling the producer with an arbitrary shell `python3` directly
+can bypass the installed runtime settings, so it is not the recommended path.
 
-You do not need to re-add it after future updates as long as the output path stays the same.
+For source-development diagnostics before installation,
+`python3 -B scripts/diagnose.py` deliberately uses the source tree and the
+invoking shell's Python/environment; it is not an installed-runtime check.
 
-## Manual account refresh
+After at least one session, an optional transcript-based Stop test is:
 
-This works without completing a Codex turn:
-
-```bash
-python3 ~/.codex/runcat-neo-hook.py --refresh
-python3 -m json.tool ~/.codex/runcat-usage.json
-```
-
-## Manual Stop-hook test
-
-After installation and after at least one Codex session exists:
-
-```bash
+```sh
 sh scripts/test-latest.sh
 ```
 
-A standalone line containing:
+It discovers the saved home/output path and calls the installed launcher. A
+standalone `{}` is the hook protocol response, **not proof of a successful
+snapshot update**. The hook must not fail a Codex turn when telemetry fails.
+Use `run_installed.py refresh` or `verify_local.py` for a strict live check.
 
-```json
-{}
-```
+## Quota selection and failure behavior
 
-is normal. It is the hook response returned to Codex.
+Only usable finite numeric quota windows participate. Among windows with a
+finite positive duration, the longest is selected; a usable unknown-duration
+window is a fallback. Seven days is `Weekly Remaining`, one day is
+`Daily Remaining`, other whole-day/hour windows are e.g. `30d Remaining` or
+`5h Remaining`, and other durations are `Quota Remaining`. The card reports
+remaining quota, not used quota.
 
-## Safe diagnostic
-
-To inspect the current Codex account/rate-limit shape without printing access tokens, email addresses, user IDs, or account IDs:
-
-```bash
-python3 scripts/diagnose.py
-```
-
-This is useful after a Codex update if the backend schema or quota policy changes.
+The Stop hook first considers the newest token-count record in a bounded
+transcript tail; unusable transcript data falls back to the current account
+response rather than an older record. An account-only failure or absence of
+usable quota preserves the existing snapshot **and its timestamp**. `--refresh`
+then exits with status 1. Stop-hook mode returns `{}` with status 0 so a metric
+failure cannot fail the Codex turn.
 
 ## Account switching
 
-Both refresh paths query the currently active Codex account for account-level metadata.
+Plan, credits and coupons are obtained from the current account query each run.
+A Stop transcript is not independently matched to account identity, so a card
+can combine a transcript quota with current account metadata during a switch.
+An offline refresh may leave the entire pre-switch snapshot visible. There is
+no stale credit/coupon cache fallback, but this is not an account-identity
+coherence guarantee. After switching, a successful account-only
+`python3 -B scripts/run_installed.py refresh` establishes a new account snapshot.
+No account identifiers are persisted for reconciliation.
 
-That is intentional: it avoids showing a previous account's reset coupons after switching accounts. A background refresh will normally pick up a switched account within five minutes even if no Codex turn is completed; a completed turn updates it immediately.
+## Background job, privacy and removal
 
-The integration does not use stale account/credit/coupon cache fallback.
-
-## Quota-window selection
-
-Codex can expose a `primary` and a `secondary` rate-limit window.
-
-This integration selects the **longest finite window** as the main account quota. This favors a weekly/monthly-style allowance over a short burst window when both are present.
-
-Known labels:
-
-- 1 day → `Daily Remaining`
-- 7 days → `Weekly Remaining`
-- other whole-day windows → e.g. `30d Remaining`
-- other whole-hour windows → e.g. `5h Remaining`
-- unknown duration → `Quota Remaining`
-
-This is deliberately mechanical rather than trying to predict future Codex policy.
-
-## Privacy
-
-The RunCat metrics file contains only display data such as plan, remaining quota, credit balance, reset times, and reset-credit count/expiry.
-
-It does **not** write:
-
-- access tokens,
-- refresh tokens,
-- email addresses,
-- ChatGPT account IDs,
-- ChatGPT user IDs,
-- conversation contents.
-
-Do not commit files from `~/.codex/` to this repository.
-
-## Background job status
-
-```bash
-launchctl print gui/$(id -u)/dev.runcat.codex-usage
+```sh
+launchctl print "gui/$(id -u)/dev.runcat.codex-usage"
 ```
 
-The LaunchAgent interval is 300 seconds.
+The producer uses the signed-in local Codex app-server, which queries the account;
+it is not an offline-only integration. The RunCat snapshot contains display data,
+not tokens, email addresses, account/user IDs or conversation contents. Do not
+commit files from `~/.codex` or another runtime home, diagnostics, logs or backups.
 
-## Uninstall
-
-```bash
+```sh
 sh uninstall.sh
 ```
 
-This removes the Stop-hook registration, background LaunchAgent, and installed hook script.
+This removes the owned Stop command, launcher, producer and LaunchAgent while
+keeping unrelated hooks, metric data, logs and backups. The saved custom home is
+recovered automatically. See [maintenance notes](docs/MAINTENANCE.md) for
+verification, failure handling and supported update scope.
 
-It keeps `~/.codex/runcat-usage.json` so RunCat does not suddenly lose the source file. Delete that file manually if you want to remove the generated data too.
+## Tests and CI
 
-## After a future Codex update
-
-If the card stops updating or the quota structure changes:
-
-```bash
-python3 scripts/diagnose.py
+```sh
+python3 -B -m unittest discover -s tests -v
+sh -n install.sh
+sh -n uninstall.sh
+sh -n scripts/test-latest.sh
 ```
 
-Then compare the output against the hook logic.
-
-See [docs/MAINTENANCE.md](docs/MAINTENANCE.md) for the maintenance workflow intended for either a human maintainer or an AI coding assistant.
+CI runs the suite on Linux and macOS with read-only repository permission,
+SHA-pinned checkout, no persisted checkout credentials, and a bounded job time.
+Tests use synthetic account responses and mock/fake launchctl even on macOS;
+a green CI run is not proof of a real login, GUI service, timer or RunCat display.
+The suite covers pipe framing/deadlines, privacy, fallback, installation/rollback,
+real shell reinstallation, installed-runtime commands, and documentation/CI
+contracts. [Release audit](docs/RELEASE_AUDIT_20261003.md) records this delivery's
+scope; [earlier stabilization notes](docs/STABILIZATION_20261003.md) are historical.
 
 ## Upstream references
 
-The implementation follows public Codex protocol behavior, including:
+These are implementation references, not compatibility guarantees:
 
-- account plan types:
-  <https://github.com/openai/codex/blob/main/codex-rs/protocol/src/account.rs>
-- Codex `/status` plan labels (`SubscriptionDisplay::Status`, checked 2026-10-02):
-  <https://github.com/openai/codex/blob/main/codex-rs/tui/src/subscription.rs>
-- centralized status/analytics labels:
-  <https://github.com/openai/codex/commit/fe50d010e203a9b8dda2c7737d7d8e4a80e6ab44>
-- raw plan aliases (`PlanType::from_raw_value()`):
-  <https://github.com/openai/codex/blob/main/codex-rs/protocol/src/auth.rs>
-- account/rate-limit protocol types:
-  <https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs>
-- Codex credit display semantics (`credit_status_row`):
-  <https://github.com/openai/codex/blob/main/codex-rs/tui/src/status/rate_limits.rs>
-- account rate-limit/reset-credit backend reads:
-  <https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs>
-- Codex reset-credit UI behavior:
-  <https://github.com/openai/codex/blob/main/codex-rs/tui/src/chatwidget/reset_credits.rs>
-- RunCat Neo:
-  <https://github.com/runcat-dev/RunCatNeo>
-
-These are implementation references, not compatibility guarantees.
+- [Codex account protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs)
+- [Codex status plan labels](https://github.com/openai/codex/blob/main/codex-rs/tui/src/subscription.rs)
+- [Status-label centralization](https://github.com/openai/codex/commit/fe50d010e203a9b8dda2c7737d7d8e4a80e6ab44)
+- [Raw plan aliases](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/auth.rs)
+- [Credit display semantics](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status/rate_limits.rs)
+- [Reset-credit backend](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)
+- [Reset-credit interface](https://github.com/openai/codex/blob/main/codex-rs/tui/src/chatwidget/reset_credits.rs)
+- [RunCat Neo](https://github.com/runcat-dev/RunCatNeo)
 
 ## License
 
