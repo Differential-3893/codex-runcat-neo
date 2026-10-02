@@ -1,0 +1,19 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        run: python3 -B -m unittest discover -s tests -v
+      - name: Check shell syntax
+        run: |
+          sh -n install.sh uninstall.sh scripts/test-latest.sh
+          sh -n uninstall.sh
+          sh -n scripts/test-latest.sh
