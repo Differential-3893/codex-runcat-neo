@@ -45,12 +45,13 @@ This project is not affiliated with or endorsed by OpenAI or RunCat.
 - **Next Expiry** — the earliest expiry among available reset credits for which the backend returned details.
 
 Credit balances use Codex credit units, not dollars or quota percentages.
-Fractional balances are rounded to the nearest whole credit for display, with
-halves rounded up (for example, `1250.50` becomes `1,251`). An explicit zero is
-shown as `0`; unlimited credits show `Unlimited`. If Codex
-reports available credits without a usable balance, the row shows `Available`.
-Otherwise the row is omitted. Credit balances are read only from the current
-account, never from a previous transcript or cached account snapshot.
+Unlimited credits show `Unlimited`, regardless of `hasCredits`. Otherwise the
+row is omitted unless `hasCredits` is true. Only finite positive balances are
+shown numerically, rounded to the nearest whole credit with halves rounded up
+(for example, `1250.50` becomes `1,251`, and `0.001` becomes `0`). When
+`hasCredits` is true but the balance is zero, negative, hidden, or invalid, the
+row shows `Available`. Credit balances are read only from the current account,
+never from a previous transcript or cached account snapshot.
 
 Known plan display mappings:
 
@@ -251,6 +252,8 @@ The implementation follows public Codex protocol behavior, including:
   <https://github.com/openai/codex/commit/b725da3b6d5237e8eb0cf8bb0bc47b8efa575fc2>
 - account/rate-limit protocol types:
   <https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs>
+- Codex credit display semantics (`credit_status_row`):
+  <https://github.com/openai/codex/blob/main/codex-rs/tui/src/status/rate_limits.rs>
 - account rate-limit/reset-credit backend reads:
   <https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs>
 - Codex reset-credit UI behavior:

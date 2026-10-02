@@ -365,17 +365,17 @@ def credit_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
     value = None
     if credits.get("unlimited") is True:
         value = "Unlimited"
-    else:
+    elif credits.get("hasCredits") is True:
         raw_balance = credits.get("balance")
         if isinstance(raw_balance, str):
             try:
                 balance = Decimal(raw_balance.strip())
-                if balance.is_finite() and balance >= 0:
+                if balance.is_finite() and balance > 0:
                     rounded = balance.to_integral_value(rounding=ROUND_HALF_UP)
                     value = format(int(rounded), ",")
             except InvalidOperation:
                 pass
-        if value is None and credits.get("hasCredits") is True:
+        if value is None:
             value = "Available"
 
     if value is None:

@@ -92,12 +92,13 @@ This is a generic SF Symbol, not an official Codex logo.
 
 Read `rateLimits.credits` from the same `account/rateLimits/read` response.
 Keep only `hasCredits`, `unlimited`, and `balance`; do not add another request.
-`Credits Remaining` displays a finite nonnegative numeric balance in credit
+`unlimited: true` takes precedence and displays `Unlimited`, regardless of
+`hasCredits`. Otherwise omit the row unless `hasCredits` is true.
+`Credits Remaining` displays only finite positive balances numerically in credit
 units, rounding to whole credits using `Decimal` with `ROUND_HALF_UP`
-(for example, `1250.50` displays `1,251`). An explicit zero remains `0`.
-`unlimited: true` takes precedence and displays `Unlimited`. When `hasCredits`
-is true but the balance is unavailable or invalid, display `Available`.
-Otherwise omit the row; missing metadata must not be treated as zero.
+(for example, `1250.50` displays `1,251`, and `0.001` displays `0`). When
+`hasCredits` is true but the balance is zero, negative, hidden, or invalid,
+display `Available`; missing metadata must not be treated as zero.
 Never use transcript or cached credits as a fallback across accounts.
 
 ## Current plan mapping
