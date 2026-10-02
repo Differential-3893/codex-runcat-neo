@@ -1,26 +1,33 @@
 #!/bin/sh
 set -eu
+python3 - <<'PY'
+import json
+import os
+import plistlib
+import subprocess
+from pathlib import Path
 
-HOOK="${CODEX_HOME:-$HOME/.codex}/runcat-neo-hook.py"
-OUT="${RUNCAT_OUT_FILE:-${CODEX_HOME:-$HOME/.codex}/runcat-usage.json}"
-
-if [ ! -x "$HOOK" ]; then
-  echo "Hook is not installed or executable: $HOOK" >&2
-  exit 1
-fi
-
-transcript="$(
-  find "${CODEX_HOME:-$HOME/.codex}/sessions" -name '*.jsonl' -type f -print0 \
-  | xargs -0 stat -f '%m %N' \
-  | sort -nr \
-  | head -n 1 \
-  | cut -d ' ' -f 2-
-)"
-
-if [ -z "$transcript" ]; then
-  echo "No Codex transcript found." >&2
-  exit 1
-fi
-
-printf '{"transcript_path":"%s"}\n' "$transcript" | "$HOOK"
-python3 -m json.tool "$OUT"
+plist = Path.home() / "Library/LaunchAgents/dev.runcat.codex-usage.plist"
+config = plistlib.loads(plist.read_bytes())
+environment = config.get("EnvironmentVariables", {})
+home = Path(environment.get("CODEX_HOME", str(Path.home() / ".codex")))
+wrapper = home / "runcat-neo-hook.sh"
+if not wrapper.is_file():
+    raise SystemExit("Install the updated integration first.")
+latest = None
+mtime = -1
+for path in (home / "sessions").rglob("*.jsonl"):
+    try:
+        stamp = path.stat().st_mtime_ns
+        if path.is_file() and stamp > mtime:
+            latest, mtime = path, stamp
+    except OSError:
+        continue
+if latest is None:
+    raise SystemExit("No Codex transcript found.")
+# json.dumps handles quotes, backslashes and non-ASCII filenames correctly.
+subprocess.run([str(wrapper)], input=json.dumps({"transcript_path": str(latest)}),
+               text=True, check=True, timeout=6, env={**os.environ, **environment})
+out = Path(environment.get("RUNCAT_OUT_FILE", str(home / "runcat-usage.json")))
+print(json.dumps(json.loads(out.read_text(encoding="utf-8")), indent=2, ensure_ascii=False))
+PY

@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import select
 import shutil
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -27,14 +29,16 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
-CODEX_HOME = Path.home() / ".codex"
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().absolute()
 OUT = Path(
     os.environ.get(
         "RUNCAT_OUT_FILE",
         str(CODEX_HOME / "runcat-usage.json"),
     )
-)
+).expanduser().absolute()
 ACCOUNT_RPC_TIMEOUT_SECONDS = 3.0
+MAX_RPC_LINE_BYTES = 1024 * 1024
+MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
 
 
 def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -42,7 +46,7 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     fd, temp_path = tempfile.mkstemp(prefix=f".{path.name}-", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, ensure_ascii=False)
+            json.dump(value, output, ensure_ascii=False, allow_nan=False)
         os.replace(temp_path, path)
     except Exception:
         try:
@@ -52,30 +56,53 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
-def latest_token_count(transcript_path: str | None) -> dict[str, Any] | None:
-    if not transcript_path:
-        return None
-
-    latest = None
+def finite_number(value: Any) -> bool:
+    """JSON booleans, NaN and infinity are not usable quota measurements."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
     try:
-        with Path(transcript_path).open(encoding="utf-8") as transcript:
-            for line in transcript:
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
-                payload = event.get("payload") or {}
-                if payload.get("type") == "token_count":
-                    latest = payload
-    except OSError:
+
+def latest_token_count(transcript_path: str | None) -> dict[str, Any] | None:
+    if not isinstance(transcript_path, str) or not transcript_path:
         return None
 
-    return latest
+    # Only inspect a bounded tail: a long conversation must not delay Stop.
+    deadline = time.monotonic() + 0.35
+    try:
+        fd = os.open(transcript_path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as transcript:
+            info = os.fstat(transcript.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            start = max(0, info.st_size - MAX_TRANSCRIPT_BYTES)
+            transcript.seek(start)
+            tail = transcript.read(MAX_TRANSCRIPT_BYTES)
+        if start:
+            # Discard the possibly truncated first record, not its suffix.
+            tail = tail.partition(b"\n")[2]
+        for line in reversed(tail.splitlines()):
+            if time.monotonic() >= deadline:
+                break
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeError, RecursionError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            payload = event.get("payload")
+            if isinstance(payload, dict) and payload.get("type") == "token_count":
+                return payload
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def transcript_rate_limits(token_count: dict[str, Any] | None) -> dict[str, Any]:
-    rate_limits = (token_count or {}).get("rate_limits")
+    rate_limits = token_count.get("rate_limits") if isinstance(token_count, dict) else None
     return rate_limits if isinstance(rate_limits, dict) else {}
 
 
@@ -111,19 +138,21 @@ def transcript_plan_type(token_count: dict[str, Any] | None) -> str | None:
 def select_main_quota_window(windows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Select the longest finite account quota window."""
 
-    if not windows:
+    usable = [
+        window for window in windows
+        if isinstance(window, dict) and finite_number(window.get("usedPercent"))
+    ]
+    if not usable:
         return None
 
     with_duration = [
-        window
-        for window in windows
-        if isinstance(window.get("windowDurationMins"), (int, float))
+        window for window in usable
+        if finite_number(window.get("windowDurationMins"))
         and window["windowDurationMins"] > 0
     ]
     if with_duration:
         return max(with_duration, key=lambda item: item["windowDurationMins"])
-
-    return windows[0]
+    return usable[0]
 
 
 def find_codex() -> str:
@@ -132,7 +161,7 @@ def find_codex() -> str:
         return override
 
     preferred = Path.home() / ".local" / "bin" / "codex"
-    if preferred.exists():
+    if preferred.is_file() and os.access(preferred, os.X_OK):
         return str(preferred)
 
     found = shutil.which("codex")
@@ -142,47 +171,140 @@ def find_codex() -> str:
     raise RuntimeError("Codex CLI not found")
 
 
-def send_rpc(proc: subprocess.Popen[str], message: dict[str, Any]) -> None:
+def send_rpc(proc: subprocess.Popen[bytes], message: dict[str, Any]) -> None:
     if proc.stdin is None:
         raise RuntimeError("Codex app-server stdin is unavailable")
-    proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+    proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
     proc.stdin.flush()
 
 
 def read_rpc_response(
-    proc: subprocess.Popen[str],
+    proc: subprocess.Popen[bytes],
     request_id: str,
     deadline: float,
+    pending: bytearray | None = None,
 ) -> dict[str, Any]:
+    """Read newline-delimited JSON without mixing select and text buffering.
+
+    Reuse ``pending`` across requests on the same process. Both buffered lines
+    and partial-line reads are subject to the caller's overall deadline.
+    """
     if proc.stdout is None:
         raise RuntimeError("Codex app-server stdout is unavailable")
+    if pending is None:
+        pending = bytearray()
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
 
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Codex account query timed out")
 
-        readable, _, _ = select.select([proc.stdout], [], [], remaining)
-        if not readable:
-            raise TimeoutError("Codex account query timed out")
+        newline = pending.find(b"\n")
+        if newline >= 0:
+            if newline > MAX_RPC_LINE_BYTES:
+                raise RuntimeError("Codex app-server response is too large")
+            line = bytes(pending[:newline])
+            del pending[:newline + 1]
+            try:
+                message = json.loads(line)
+            except (ValueError, UnicodeError, RecursionError):
+                continue
+            if not isinstance(message, dict) or message.get("id") != request_id:
+                continue
+            if "error" in message:
+                # Never reflect an untrusted RPC error payload into a log.
+                raise RuntimeError("Codex app-server rejected the account query")
+            result = message.get("result")
+            return result if isinstance(result, dict) else {}
 
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("Codex app-server exited")
-
+        if len(pending) > MAX_RPC_LINE_BYTES:
+            raise RuntimeError("Codex app-server response is too large")
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            readable, _, _ = select.select([fd], [], [], remaining)
+            if not readable:
+                raise TimeoutError("Codex account query timed out")
+            chunk = os.read(fd, 65536)
+        except (InterruptedError, BlockingIOError):
             continue
+        if not chunk:
+            raise RuntimeError("Codex app-server exited before a complete response")
+        pending.extend(chunk)
 
-        if message.get("id") != request_id:
-            continue
 
-        if "error" in message:
-            raise RuntimeError(str(message["error"]))
+def close_process(proc: subprocess.Popen[bytes]) -> None:
+    """Reap the child after either a successful query or a failed one."""
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=0.5)
+    finally:
+        for stream in (proc.stdin, proc.stdout):
+            if stream is not None:
+                stream.close()
 
-        result = message.get("result")
-        return result if isinstance(result, dict) else {}
+
+def safe_account_data(result: dict[str, Any]) -> dict[str, Any]:
+    """Project known scalar fields; no nested backend objects or free text."""
+    rate_limits = result.get("rateLimits")
+    rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
+    windows = {}
+    for key in ("primary", "secondary"):
+        window = rate_limits.get(key)
+        windows[key] = (
+            {field: window.get(field) if finite_number(window.get(field)) else None
+             for field in ("usedPercent", "windowDurationMins", "resetsAt")}
+            if isinstance(window, dict) else None
+        )
+    credits = rate_limits.get("credits")
+    safe_credits = None
+    if isinstance(credits, dict):
+        balance = credits.get("balance")
+        # A diagnostic must not print arbitrary text in a balance field.
+        try:
+            if not isinstance(balance, str) or not Decimal(balance.strip()).is_finite():
+                balance = None
+        except InvalidOperation:
+            balance = None
+        safe_credits = {
+            "hasCredits": credits.get("hasCredits") is True,
+            "unlimited": credits.get("unlimited") is True,
+            "balance": balance,
+        }
+    reset_info = result.get("rateLimitResetCredits")
+    safe_resets = None
+    if isinstance(reset_info, dict):
+        count = reset_info.get("availableCount")
+        safe_resets = {
+            "availableCount": count if finite_number(count) else None,
+            "credits": [],
+        }
+        raw_credits = reset_info.get("credits")
+        for credit in raw_credits if isinstance(raw_credits, list) else []:
+            if not isinstance(credit, dict):
+                continue
+            status = credit.get("status")
+            # Only availability and expiry are needed by the card/diagnostic.
+            safe_status = "available" if isinstance(status, str) and status.lower() == "available" else "unavailable"
+            expiry = credit.get("expiresAt")
+            safe_resets["credits"].append({
+                "status": safe_status,
+                "expiresAt": expiry if finite_number(expiry) else None,
+            })
+    plan = rate_limits.get("planType")
+    # Codex plan identifiers are names, not backend messages or account IDs.
+    if not isinstance(plan, str) or not plan.strip():
+        plan = None
+    return {
+        "planType": plan,
+        "primary": windows["primary"], "secondary": windows["secondary"],
+        "credits": safe_credits, "resetCoupons": safe_resets,
+    }
 
 
 def fetch_account_data() -> dict[str, Any]:
@@ -194,12 +316,12 @@ def fetch_account_data() -> dict[str, Any]:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        text=True,
-        encoding="utf-8",
-        bufsize=1,
+        bufsize=0,
+        env={**os.environ, "CODEX_HOME": str(CODEX_HOME)},
     )
 
     deadline = time.monotonic() + ACCOUNT_RPC_TIMEOUT_SECONDS
+    pending = bytearray()
 
     try:
         send_rpc(
@@ -219,7 +341,7 @@ def fetch_account_data() -> dict[str, Any]:
                 },
             },
         )
-        read_rpc_response(proc, "init", deadline)
+        read_rpc_response(proc, "init", deadline, pending)
         send_rpc(proc, {"method": "initialized"})
 
         send_rpc(
@@ -233,67 +355,11 @@ def fetch_account_data() -> dict[str, Any]:
                 },
             },
         )
-        result = read_rpc_response(proc, "usage", deadline)
+        result = read_rpc_response(proc, "usage", deadline, pending)
 
-        rate_limits = result.get("rateLimits")
-        rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
-
-        safe_windows = {}
-        for key in ("primary", "secondary"):
-            window = rate_limits.get(key)
-            safe_windows[key] = (
-                {
-                    field: window.get(field)
-                    for field in ("usedPercent", "windowDurationMins", "resetsAt")
-                }
-                if isinstance(window, dict) else None
-            )
-
-        credits = rate_limits.get("credits")
-        safe_credits = None
-        if isinstance(credits, dict):
-            safe_credits = {
-                key: credits.get(key) for key in ("hasCredits", "unlimited", "balance")
-            }
-
-        reset_info = result.get("rateLimitResetCredits")
-        safe_resets = None
-
-        if isinstance(reset_info, dict):
-            safe_resets = {
-                "availableCount": reset_info.get("availableCount"),
-                "credits": [],
-            }
-
-            for credit in reset_info.get("credits") or []:
-                if not isinstance(credit, dict):
-                    continue
-
-                safe_resets["credits"].append(
-                    {
-                        "status": credit.get("status"),
-                        "expiresAt": credit.get("expiresAt"),
-                        "title": credit.get("title"),
-                    }
-                )
-
-        return {
-            "planType": rate_limits.get("planType"),
-            "primary": safe_windows["primary"],
-            "secondary": safe_windows["secondary"],
-            "credits": safe_credits,
-            "resetCoupons": safe_resets,
-        }
-
+        return safe_account_data(result)
     finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=0.5)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        close_process(proc)
 
 
 def account_data() -> dict[str, Any] | None:
@@ -323,7 +389,7 @@ def quota_title(window_minutes: Any) -> str:
     if window_minutes == 1440:
         return "Daily Remaining"
 
-    if isinstance(window_minutes, (int, float)) and window_minutes > 0:
+    if finite_number(window_minutes) and window_minutes > 0:
         if window_minutes % 1440 == 0:
             return f"{window_minutes / 1440:g}d Remaining"
         if window_minutes % 60 == 0:
@@ -371,7 +437,7 @@ def plan_name(raw: Any) -> str | None:
 
 
 def local_time_text(timestamp: Any) -> str | None:
-    if not isinstance(timestamp, (int, float)):
+    if not finite_number(timestamp):
         return None
 
     try:
@@ -399,7 +465,7 @@ def credit_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
                 if balance.is_finite() and balance > 0:
                     rounded = balance.to_integral_value(rounding=ROUND_HALF_UP)
                     value = format(int(rounded), ",")
-            except InvalidOperation:
+            except (InvalidOperation, ValueError, OverflowError):
                 pass
         if value is None:
             value = "Available"
@@ -420,7 +486,7 @@ def coupon_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     count = reset_info.get("availableCount")
 
-    if isinstance(count, (int, float)):
+    if finite_number(count):
         metrics.append(
             {
                 "title": "Reset Coupons",
@@ -429,7 +495,8 @@ def coupon_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
         )
 
     expiries: list[float] = []
-    for credit in reset_info.get("credits") or []:
+    raw_credits = reset_info.get("credits")
+    for credit in raw_credits if isinstance(raw_credits, list) else []:
         if not isinstance(credit, dict):
             continue
 
@@ -438,7 +505,7 @@ def coupon_metrics(account: dict[str, Any] | None) -> list[dict[str, Any]]:
             continue
 
         expires_at = credit.get("expiresAt")
-        if isinstance(expires_at, (int, float)):
+        if finite_number(expires_at):
             expiries.append(float(expires_at))
 
     if expiries:
@@ -467,16 +534,14 @@ def write_snapshot(hook_input: dict[str, Any] | None = None) -> bool:
 
     # A Stop hook gets the turn-local transcript first for immediate freshness.
     # Background refreshes have no transcript and therefore use account data.
-    windows = transcript_windows(token_count)
-    if not windows:
-        windows = account_windows(account)
-
-    window = select_main_quota_window(windows)
+    window = select_main_quota_window(transcript_windows(token_count))
+    if window is None:
+        window = select_main_quota_window(account_windows(account))
     if window is None:
         return False
 
     used = window.get("usedPercent")
-    if not isinstance(used, (int, float)):
+    if not finite_number(used):
         return False
 
     remaining = max(0.0, min(100.0, 100.0 - float(used)))
@@ -537,29 +602,33 @@ def refresh_from_account() -> bool:
     return write_snapshot({})
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--refresh", action="store_true")
     args, _unknown = parser.parse_known_args()
 
     if args.refresh:
         try:
-            refresh_from_account()
-        except Exception as error:
-            print(f"RunCat Codex refresh: {error}", file=sys.stderr)
-        return
+            if refresh_from_account():
+                return 0
+        except Exception:
+            pass
+        print("RunCat Codex refresh: no fresh snapshot; existing file preserved.", file=sys.stderr)
+        return 1
 
     try:
         hook_input = json.load(sys.stdin)
         if not isinstance(hook_input, dict):
             hook_input = {}
         write_snapshot(hook_input)
-    except Exception as error:
-        print(f"RunCat Codex hook: {error}", file=sys.stderr)
+    except Exception:
+        # No exception text: it can contain input fragments or private paths.
+        print("RunCat Codex hook: refresh skipped; existing file preserved.", file=sys.stderr)
 
-    # Codex hooks expect a JSON response on stdout.
+    # A failed metric must never block the Codex turn.
     print("{}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

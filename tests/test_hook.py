@@ -136,7 +136,7 @@ class HookTests(unittest.TestCase):
             "resetCoupons": {
                 "availableCount": 2,
                 "credits": [
-                    {"status": "available", "expiresAt": 1791173986, "title": "Full reset"}
+                    {"status": "available", "expiresAt": 1791173986}
                 ],
             },
         }
