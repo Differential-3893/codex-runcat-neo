@@ -238,6 +238,17 @@ def fetch_account_data() -> dict[str, Any]:
         rate_limits = result.get("rateLimits")
         rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
 
+        safe_windows = {}
+        for key in ("primary", "secondary"):
+            window = rate_limits.get(key)
+            safe_windows[key] = (
+                {
+                    field: window.get(field)
+                    for field in ("usedPercent", "windowDurationMins", "resetsAt")
+                }
+                if isinstance(window, dict) else None
+            )
+
         credits = rate_limits.get("credits")
         safe_credits = None
         if isinstance(credits, dict):
@@ -268,8 +279,8 @@ def fetch_account_data() -> dict[str, Any]:
 
         return {
             "planType": rate_limits.get("planType"),
-            "primary": rate_limits.get("primary"),
-            "secondary": rate_limits.get("secondary"),
+            "primary": safe_windows["primary"],
+            "secondary": safe_windows["secondary"],
             "credits": safe_credits,
             "resetCoupons": safe_resets,
         }

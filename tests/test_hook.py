@@ -113,20 +113,111 @@ class HookTests(unittest.TestCase):
                 )
         self.assertEqual(hook.credit_metrics(None), [])
 
-    def test_fetch_account_data_filters_credit_metadata(self):
-        credits = {"hasCredits": True, "unlimited": False, "balance": "1250.50"}
-        response = {
-            "accountId": "synthetic-account-id",
-            "rateLimits": {
-                "credits": {**credits, "accessToken": "synthetic-secret"},
+    def private_account_fixture(self):
+        private = {
+            key: f"synthetic-private-{key}"
+            for key in (
+                "email", "userId", "user_id", "chatgptUserId", "chatgpt_user_id",
+                "accountId", "account_id", "accessToken", "access_token",
+                "refreshToken", "refresh_token",
+            )
+        }
+        account = {
+            "planType": "pro",
+            "primary": {
+                "usedPercent": 61.0, "windowDurationMins": 10080,
+                "resetsAt": 1790391033,
+            },
+            "secondary": {
+                "usedPercent": 20.0, "windowDurationMins": 300,
+                "resetsAt": 1790376633,
+            },
+            "credits": {"hasCredits": True, "unlimited": False, "balance": "1250.50"},
+            "resetCoupons": {
+                "availableCount": 2,
+                "credits": [
+                    {"status": "available", "expiresAt": 1791173986, "title": "Full reset"}
+                ],
             },
         }
+        response = {
+            **private,
+            "account": {"type": "chatgpt", **private},
+            "rateLimits": {
+                **private,
+                "planType": account["planType"],
+                **{key: {**account[key], **private} for key in ("primary", "secondary", "credits")},
+            },
+            "rateLimitResetCredits": {
+                **account["resetCoupons"], **private,
+                "credits": [{**account["resetCoupons"]["credits"][0], **private}],
+            },
+        }
+        return response, account, private
+
+    def assert_private_metadata_absent(self, serialized, private):
+        for key, value in private.items():
+            self.assertNotIn(f'"{key}"', serialized)
+            self.assertNotIn(value, serialized)
+
+    def test_fetch_account_data_filters_private_metadata(self):
+        response, expected, private = self.private_account_fixture()
         with mock.patch.object(hook, "find_codex", return_value="codex"), \
              mock.patch.object(hook.subprocess, "Popen"), \
-             mock.patch.object(hook, "read_rpc_response", side_effect=[{}, response]):
+             mock.patch.object(hook, "send_rpc") as send, \
+             mock.patch.object(hook, "read_rpc_response", side_effect=[private, response]):
             account = hook.fetch_account_data()
-        self.assertEqual(account["credits"], credits)
-        self.assertNotIn("synthetic-", json.dumps(account))
+        self.assert_private_metadata_absent(json.dumps(account), private)
+        self.assertEqual(account, expected)
+        self.assertEqual(
+            [call.args[1]["method"] for call in send.call_args_list],
+            ["initialize", "initialized", "account/rateLimits/read"],
+        )
+
+    def test_snapshots_filter_private_rpc_metadata(self):
+        response, _expected, private = self.private_account_fixture()
+        for mode in ("background", "stop"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "runcat-usage.json"
+                transcript = Path(tmp) / "session.jsonl"
+                transcript.write_text(json.dumps({
+                    "payload": {
+                        "type": "token_count", **private,
+                        "rate_limits": {
+                            **private, "plan_type": "plus",
+                            "credits": {"has_credits": True, "balance": "999", **private},
+                            "primary": {
+                                **private, "used_percent": 10.0,
+                                "window_minutes": 10080, "resets_at": 1790391033,
+                            },
+                        },
+                    },
+                }) + "\n", encoding="utf-8")
+                with mock.patch.object(hook, "OUT", out), \
+                     mock.patch.object(hook, "find_codex", return_value="codex"), \
+                     mock.patch.object(hook.subprocess, "Popen"), \
+                     mock.patch.object(hook, "read_rpc_response", side_effect=[private, response]):
+                    wrote = (
+                        hook.refresh_from_account() if mode == "background"
+                        else hook.write_snapshot({"transcript_path": str(transcript)})
+                    )
+                self.assertTrue(wrote)
+                serialized = out.read_text(encoding="utf-8")
+                self.assert_private_metadata_absent(serialized, private)
+                data = json.loads(serialized)
+                self.assertEqual(set(data), {
+                    "title", "symbol", "metrics", "lastUpdatedDate", "metricsBarValue",
+                })
+                remaining = "39%" if mode == "background" else "90%"
+                self.assertEqual(data["metricsBarValue"], remaining)
+                self.assertEqual(data["symbol"], "apple.terminal")
+                metrics = {item["title"]: item for item in data["metrics"]}
+                self.assertEqual(metrics["Plan"]["formattedValue"], "Pro 200")
+                self.assertEqual(metrics["Credits Remaining"]["formattedValue"], "1,251")
+                self.assertEqual(metrics["Weekly Remaining"]["formattedValue"], remaining)
+                self.assertEqual(metrics["Reset Coupons"]["formattedValue"], "2")
+                self.assertIn("Reset", metrics)
+                self.assertIn("Next Expiry", metrics)
 
     def test_background_credits_follow_current_account(self):
         quota = {"usedPercent": 61, "windowDurationMins": 10080}
