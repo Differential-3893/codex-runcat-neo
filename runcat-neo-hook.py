@@ -329,13 +329,28 @@ def plan_name(raw: Any) -> str | None:
     if not value:
         return None
 
+    # Match TUI SubscriptionDisplay::Status, not KnownPlan::display_name().
+    # Include the aliases accepted by PlanType::from_raw_value().
     names = {
         "free": "Free",
+        "go": "Go",
         "plus": "Plus",
-        "prolite": "Pro",
-        "pro": "Pro (More)",
-        "promax": "Pro (Max)",
-        "business": "Business",
+        "prolite": "Pro 100",
+        "pro": "Pro 200",
+        "promax": "Pro 500",
+        "team": "Business",
+        "self_serve_business_usage_based": "Business",
+        "business": "Enterprise",
+        "self_serve_business_prolite": "Business Premium",
+        "ent26": "Enterprise",
+        "enterprise_cbp_usage_based": "Enterprise",
+        "enterprise": "Enterprise",
+        "hc": "Enterprise",
+        "enterprise_cbp_automation": "Enterprise (Automation)",
+        "edu": "Edu",
+        "education": "Edu",
+        "edu_plus": "Edu Plus",
+        "edu_pro": "Edu Pro",
     }
 
     if value in names:

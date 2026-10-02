@@ -16,13 +16,47 @@ spec.loader.exec_module(hook)
 
 class HookTests(unittest.TestCase):
     def test_plan_mapping(self):
-        self.assertEqual(hook.plan_name("free"), "Free")
-        self.assertEqual(hook.plan_name("plus"), "Plus")
-        self.assertEqual(hook.plan_name("prolite"), "Pro")
-        self.assertEqual(hook.plan_name("pro"), "Pro (More)")
-        self.assertEqual(hook.plan_name("promax"), "Pro (Max)")
-        self.assertEqual(hook.plan_name("business"), "Business")
-        self.assertEqual(hook.plan_name("future_plan"), "Future Plan")
+        # Expected labels from upstream SubscriptionDisplay::Status, plus aliases.
+        cases = [
+            ("free", "Free"),
+            ("go", "Go"),
+            ("plus", "Plus"),
+            ("prolite", "Pro 100"),
+            ("pro", "Pro 200"),
+            ("promax", "Pro 500"),
+            ("team", "Business"),
+            ("self_serve_business_usage_based", "Business"),
+            ("business", "Enterprise"),
+            ("self_serve_business_prolite", "Business Premium"),
+            ("ent26", "Enterprise"),
+            ("enterprise_cbp_usage_based", "Enterprise"),
+            ("enterprise", "Enterprise"),
+            ("hc", "Enterprise"),
+            ("enterprise_cbp_automation", "Enterprise (Automation)"),
+            ("edu", "Edu"),
+            ("education", "Edu"),
+            ("edu_plus", "Edu Plus"),
+            ("edu_pro", "Edu Pro"),
+        ]
+        for raw, expected in cases:
+            for value in (raw, raw.upper(), f"  {raw}  "):
+                with self.subTest(raw=value):
+                    self.assertEqual(hook.plan_name(value), expected)
+
+    def test_plan_fallback(self):
+        cases = [
+            ("future_plan", "Future Plan"),
+            ("  future_PLAN_v2  ", "Future Plan V2"),
+            ("future-tier", "Future-Tier"),
+            ("unknown", "Unknown"),
+            ("", None),
+            ("  ", None),
+            (None, None),
+            (123, None),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(hook.plan_name(raw), expected)
 
     def test_selects_longest_window(self):
         windows = [
@@ -167,7 +201,7 @@ class HookTests(unittest.TestCase):
             self.assertEqual(data["symbol"], "apple.terminal")
 
             metrics = {item["title"]: item for item in data["metrics"]}
-            self.assertEqual(metrics["Plan"]["formattedValue"], "Pro (More)")
+            self.assertEqual(metrics["Plan"]["formattedValue"], "Pro 200")
             self.assertEqual(metrics["Credits Remaining"]["formattedValue"], "1,251")
             self.assertEqual(metrics["Weekly Remaining"]["formattedValue"], "39%")
             self.assertEqual(metrics["Weekly Remaining"]["normalizedValue"], 0.39)
@@ -206,7 +240,7 @@ class HookTests(unittest.TestCase):
             self.assertEqual(data["metricsBarValue"], "39%")
             self.assertEqual(data["symbol"], "apple.terminal")
             metrics = {item["title"]: item for item in data["metrics"]}
-            self.assertEqual(metrics["Plan"]["formattedValue"], "Pro (More)")
+            self.assertEqual(metrics["Plan"]["formattedValue"], "Pro 200")
             self.assertEqual(metrics["Weekly Remaining"]["formattedValue"], "39%")
             self.assertEqual(metrics["Reset Coupons"]["formattedValue"], "2")
             self.assertIn("Next Expiry", metrics)

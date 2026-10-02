@@ -23,7 +23,7 @@ Example card:
 ```text
 Codex
 
-Plan: Pro (More)
+Plan: Pro 200
 Weekly Remaining: 39%
 [████████░░░░░░░░░░░░]
 
@@ -53,18 +53,29 @@ shown numerically, rounded to the nearest whole credit with halves rounded up
 row shows `Available`. Credit balances are read only from the current account,
 never from a previous transcript or cached account snapshot.
 
-Known plan display mappings:
+Known plan display mappings follow Codex `/status`
+(`SubscriptionDisplay::Status`), not `KnownPlan::display_name()` or analytics labels:
 
 | Codex plan value | Display |
 | --- | --- |
 | `free` | Free |
+| `go` | Go |
 | `plus` | Plus |
-| `prolite` | Pro |
-| `pro` | Pro (More) |
-| `promax` | Pro (Max) |
-| `business` | Business |
+| `prolite` | Pro 100 |
+| `pro` | Pro 200 |
+| `promax` | Pro 500 |
+| `team`, `self_serve_business_usage_based` | Business |
+| `business` | Enterprise |
+| `self_serve_business_prolite` | Business Premium |
+| `ent26`, `enterprise_cbp_usage_based`, `enterprise`, `hc` | Enterprise |
+| `enterprise_cbp_automation` | Enterprise (Automation) |
+| `edu`, `education` | Edu |
+| `edu_plus` | Edu Plus |
+| `edu_pro` | Edu Pro |
 
-Unknown/future values are displayed without guessing a different commercial tier.
+`hc` and `education` are aliases accepted by `PlanType::from_raw_value()`.
+Unknown/future values keep the existing fallback: trim whitespace, replace
+underscores with spaces, and title-case without guessing a different commercial tier.
 
 ## Refresh behavior
 
@@ -248,8 +259,12 @@ The implementation follows public Codex protocol behavior, including:
 
 - account plan types:
   <https://github.com/openai/codex/blob/main/codex-rs/protocol/src/account.rs>
-- Pro plan display names (2026-09-25):
-  <https://github.com/openai/codex/commit/b725da3b6d5237e8eb0cf8bb0bc47b8efa575fc2>
+- Codex `/status` plan labels (`SubscriptionDisplay::Status`, checked 2026-10-02):
+  <https://github.com/openai/codex/blob/main/codex-rs/tui/src/subscription.rs>
+- centralized status/analytics labels:
+  <https://github.com/openai/codex/commit/fe50d010e203a9b8dda2c7737d7d8e4a80e6ab44>
+- raw plan aliases (`PlanType::from_raw_value()`):
+  <https://github.com/openai/codex/blob/main/codex-rs/protocol/src/auth.rs>
 - account/rate-limit protocol types:
   <https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs>
 - Codex credit display semantics (`credit_status_row`):

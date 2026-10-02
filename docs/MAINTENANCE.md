@@ -103,18 +103,36 @@ Never use transcript or cached credits as a fallback across accounts.
 
 ## Current plan mapping
 
-```text
-free      -> Free
-plus      -> Plus
-prolite   -> Pro
-pro       -> Pro (More)
-promax    -> Pro (Max)
-business  -> Business
-```
+The card follows `SubscriptionDisplay::Status` in
+`codex-rs/tui/src/subscription.rs` (checked against upstream main on 2026-10-02).
+[openai/codex commit fe50d01](https://github.com/openai/codex/commit/fe50d010e203a9b8dda2c7737d7d8e4a80e6ab44)
+centralized the TUI labels while preserving deliberate status/analytics differences.
+Do not copy `KnownPlan::display_name()` from `codex-rs/protocol/src/auth.rs`
+or use `SubscriptionDisplay::Analytics` for the card.
 
-These Pro labels follow [openai/codex commit b725da3](https://github.com/openai/codex/commit/b725da3b6d5237e8eb0cf8bb0bc47b8efa575fc2) (2026-09-25).
+| Raw plan value | `/status` / card label |
+| --- | --- |
+| `free` | Free |
+| `go` | Go |
+| `plus` | Plus |
+| `prolite` | Pro 100 |
+| `pro` | Pro 200 |
+| `promax` | Pro 500 |
+| `team`, `self_serve_business_usage_based` | Business |
+| `business` | Enterprise |
+| `self_serve_business_prolite` | Business Premium |
+| `ent26`, `enterprise_cbp_usage_based`, `enterprise`, `hc` | Enterprise |
+| `enterprise_cbp_automation` | Enterprise (Automation) |
+| `edu`, `education` | Edu |
+| `edu_plus` | Edu Plus |
+| `edu_pro` | Edu Pro |
+
+`hc` and `education` follow the aliases in `PlanType::from_raw_value()` in
+`codex-rs/protocol/src/auth.rs`. Keep case-insensitive lookup and whitespace trimming.
 Do not relabel `prolite`/`pro`/`promax` as community nicknames such as “5x” or “20x”.
-Unknown future backend values should be preserved rather than guessed.
+Unknown future values keep the existing fallback: trim whitespace, replace
+underscores with spaces, and title-case. Do not collapse them to `Unknown` or
+guess a commercial tier. Keep `plan_name()`, its tests, and the README table in sync.
 
 ## Verified protocol fields
 
@@ -239,6 +257,8 @@ The diagnostic script is intentionally filtered.
 OpenAI Codex:
 
 - `codex-rs/protocol/src/account.rs`
+- `codex-rs/protocol/src/auth.rs` (raw plan values and aliases only)
+- `codex-rs/tui/src/subscription.rs` (`SubscriptionDisplay::Status` plan labels)
 - `codex-rs/app-server-protocol/src/protocol/v2/account.rs`
 - `codex-rs/tui/src/status/rate_limits.rs` (credits display semantics)
 - `codex-rs/backend-client/src/client/rate_limit_resets.rs`
