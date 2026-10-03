@@ -108,7 +108,12 @@ The launcher and LaunchAgent use the same saved Python, Codex executable,
 `CODEX_HOME`, output file and runtime `PATH`. Reopen Codex and approve the changed
 hook command if prompted. A successful install registration is distinct from a
 successful live account read: `scripts/verify_local.py` checks both refresh paths
-and prints `LOCAL CHECK PASSED` when its checks succeed. An offline account check
+and prints `LOCAL CHECK PASSED` when its checks succeed. The manual Stop check
+uses `--verify-stop`: the same Stop path with a strict failure exit status, plus
+an atomic-file-replacement and per-invocation timestamp check. The ordinary
+registered hook has no such flag and remains fail-open. Identical quota values
+and timestamps within one second do not cause a false failure. See the
+[Stop-write verification and compatibility notes](docs/VERIFICATION_COMPATIBILITY_20261003.md). An offline account check
 may fail without undoing a successfully registered installation; the old metric
 snapshot is kept. The verifier does not observe a real Codex turn, a full timer
 cycle, or the RunCat user interface.
@@ -183,6 +188,15 @@ Use `run_installed.py refresh` or `verify_local.py` for a strict live check.
 
 ## Quota selection and failure behavior
 
+The account card reads the server's backward-compatible `rateLimits` single-bucket
+view. Optional `rateLimitsByLimitId` entries do not replace or merge that view,
+including when another bucket has a longer window. If the required single view
+has no usable quota, account-only refresh preserves the previous snapshot; it
+does not guess another bucket. A remaining percentage is telemetry, not a
+guarantee of backend permission to run a model. The
+[compatibility tests](docs/VERIFICATION_COMPATIBILITY_20261003.md) pin this policy
+with synthetic single- and multi-bucket responses.
+
 Only usable finite numeric quota windows participate. Among windows with a
 finite positive duration, the longest is selected; a usable unknown-duration
 window is a fallback. Seven days is `Weekly Remaining`, one day is
@@ -194,7 +208,7 @@ The Stop hook first considers the newest token-count record in a bounded
 transcript tail; unusable transcript data falls back to the current account
 response rather than an older record. An account-only failure or absence of
 usable quota preserves the existing snapshot **and its timestamp**. `--refresh`
-then exits with status 1. Stop-hook mode returns `{}` with status 0 so a metric
+then exits with status 1. Ordinary Stop-hook mode returns `{}` with status 0 so a metric
 failure cannot fail the Codex turn.
 
 ## Account switching

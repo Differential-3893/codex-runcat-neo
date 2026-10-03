@@ -250,7 +250,13 @@ def close_process(proc: subprocess.Popen[bytes]) -> None:
 
 
 def safe_account_data(result: dict[str, Any]) -> dict[str, Any]:
-    """Project known scalar fields; no nested backend objects or free text."""
+    """Project the backward-compatible single-bucket view, not a bucket merge.
+
+    ``rateLimitsByLimitId`` can coexist with ``rateLimits``. This one-card
+    integration intentionally keeps the latter authoritative; a different
+    bucket must not replace missing quota/plan/credit fields. See
+    docs/VERIFICATION_COMPATIBILITY_20261003.md for the pinned protocol/tests.
+    """
     rate_limits = result.get("rateLimits")
     rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
     windows = {}
@@ -604,7 +610,10 @@ def refresh_from_account() -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--refresh", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--refresh", action="store_true")
+    mode.add_argument("--verify-stop", action="store_true",
+                      help="run the Stop path, but fail this manual check if no snapshot was written")
     args, _unknown = parser.parse_known_args()
 
     if args.refresh:
@@ -616,17 +625,22 @@ def main() -> int:
         print("RunCat Codex refresh: no fresh snapshot; existing file preserved.", file=sys.stderr)
         return 1
 
+    wrote = False
     try:
         hook_input = json.load(sys.stdin)
         if not isinstance(hook_input, dict):
             hook_input = {}
-        write_snapshot(hook_input)
+        wrote = write_snapshot(hook_input)
     except Exception:
         # No exception text: it can contain input fragments or private paths.
         print("RunCat Codex hook: refresh skipped; existing file preserved.", file=sys.stderr)
 
-    # A failed metric must never block the Codex turn.
+    # The registered hook has no --verify-stop flag: a failed metric must
+    # never block a Codex turn. Only the opt-in manual verifier fails closed.
     print("{}")
+    if args.verify_stop and not wrote:
+        print("RunCat Stop verification: this invocation wrote no fresh snapshot.", file=sys.stderr)
+        return 1
     return 0
 
 

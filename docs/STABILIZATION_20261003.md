@@ -1,5 +1,9 @@
 # Stabilization — 2026-10-03
 
+Historical scope: the later [Stop-write and compatibility follow-up](VERIFICATION_COMPATIBILITY_20261003.md)
+supersedes the manual verifier described here. Original scope/counts below refer
+to their respective deliveries.
+
 Historical telemetry/installer patch notes. For the current consolidated delivery,
 see [release audit](RELEASE_AUDIT_20261003.md) and [runtime settings](RUNTIME_SETTINGS.md).
 

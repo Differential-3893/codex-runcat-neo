@@ -4,7 +4,9 @@ The [README](../README.md) is the user entrypoint. The
 [runtime contract](RUNTIME_SETTINGS.md) defines installation precedence and the
 [release audit](RELEASE_AUDIT_20261003.md) records the reviewed scope. The earlier
 [stabilization notes](STABILIZATION_20261003.md) explain retained observation
-semantics; historical test counts there are not current suite counts.
+semantics; historical test counts there are not current suite counts. The follow-up
+[Stop-write/compatibility audit](VERIFICATION_COMPATIBILITY_20261003.md) records
+the stricter manual verifier and the single-bucket display policy.
 
 ## Runtime contract
 
@@ -45,6 +47,12 @@ is not freshness evidence. `scripts/diagnose.py` without the installed helper
 is a source-development command using the caller's environment. For an optional
 transcript check, `sh scripts/test-latest.sh` returns the protocol `{}` even if
 refresh failed; do not treat that response alone as a health check.
+The live verifier invokes the same installed Stop path with `--verify-stop`,
+which makes a skipped write nonzero only for that manual call. It additionally
+requires an atomic replacement and a timestamp within each invocation. Never
+add this strict-only flag to the normal Codex hook registration. Regressions
+must reject first-query success followed by Stop failure, even if another writer
+refreshes the output, and accept same-second writes with unchanged quota.
 
 Keep code, the README's requirements/manual commands, and RUNTIME_SETTINGS in
 sync. Reinstallation tests must execute `sh install.sh`, not merely call the
@@ -57,7 +65,10 @@ require the user's Mac and must be reported separately.
 Keep the existing `SubscriptionDisplay::Status` plan mapping, documented
 unknown-plan fallback, remaining-quota convention and longest-usable-window
 policy. Do not change labels from memory or infer commercial policy from a
-window duration. For a real upstream change, obtain a privacy-filtered current
+window duration. The window-selection rule operates within the backward-compatible
+`rateLimits` view; do not combine it with `rateLimitsByLimitId` buckets or recover
+missing fields from another bucket. See the pinned synthetic compatibility fixture.
+For a real upstream change, obtain a privacy-filtered current
 response and compare the relevant primary-source protocol before modifying it.
 
 Credits: unlimited takes precedence; otherwise omit unless hasCredits is true.

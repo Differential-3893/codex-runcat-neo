@@ -1,0 +1,81 @@
+{
+  "synthetic": true,
+  "upstream_commit": "c5d242fa7907bff1b7a7e26e95febc548c0a6963",
+  "source_path": "codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts",
+  "note": "Field names follow the pinned public protocol; values are synthetic, not account telemetry.",
+  "response": {
+    "ordinaryUsageAllowed": null,
+    "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "planType": "pro",
+      "primary": {
+        "usedPercent": 61,
+        "windowDurationMins": 10080,
+        "resetsAt": 1791000000
+      },
+      "secondary": {
+        "usedPercent": 20,
+        "windowDurationMins": 300,
+        "resetsAt": 1790967000
+      },
+      "credits": {
+        "hasCredits": true,
+        "unlimited": false,
+        "balance": "1250.50"
+      },
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "limitId": "codex",
+        "limitName": null,
+        "planType": "pro",
+        "primary": {
+          "usedPercent": 61,
+          "windowDurationMins": 10080,
+          "resetsAt": 1791000000
+        },
+        "secondary": {
+          "usedPercent": 20,
+          "windowDurationMins": 300,
+          "resetsAt": 1790967000
+        },
+        "credits": {
+          "hasCredits": true,
+          "unlimited": false,
+          "balance": "1250.50"
+        },
+        "rateLimitReachedType": null
+      },
+      "other_meter": {
+        "limitId": "other_meter",
+        "limitName": "Synthetic additional bucket",
+        "planType": "plus",
+        "primary": {
+          "usedPercent": 99,
+          "windowDurationMins": 43200,
+          "resetsAt": 1792000000
+        },
+        "secondary": null,
+        "credits": {
+          "hasCredits": true,
+          "unlimited": false,
+          "balance": "999999.00"
+        },
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitResetCredits": {
+      "availableCount": 2,
+      "credits": [
+        {
+          "status": "available",
+          "expiresAt": 1791100000
+        }
+      ]
+    },
+    "accountId": null,
+    "rateLimitUpsell": null
+  }
+}
